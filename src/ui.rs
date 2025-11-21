@@ -1,24 +1,24 @@
 use crate::app::App;
 use ratatui::{
-    prelude::*,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, BorderType, Cell, Paragraph, Row, Table, TableState, Wrap, Clear},
+    widgets::{Block, Borders, BorderType, Cell, Paragraph, Row, Table, Wrap, Clear},
     Frame,
 };
 use tachyonfx::{
-    fx, Duration, Effect, EffectRenderer, Interpolation,
+    fx, Duration, EffectRenderer, Interpolation,
 };
 
 // Modern Color Palette (GitHub Dark / Dracula inspired)
+// Modern Color Palette (Cyberpunk / Dracula inspired)
 const PALETTE_PRIMARY: Color = Color::Rgb(189, 147, 249);    // Deep Purple
 const PALETTE_SECONDARY: Color = Color::Rgb(139, 233, 253);  // Cyan
 const PALETTE_ACCENT: Color = Color::Rgb(255, 121, 198);     // Pink
 const PALETTE_SUCCESS: Color = Color::Rgb(80, 250, 123);     // Green
 const PALETTE_WARNING: Color = Color::Rgb(241, 250, 140);    // Yellow
 const PALETTE_ERROR: Color = Color::Rgb(255, 85, 85);        // Red
-const PALETTE_BG_DARK: Color = Color::Rgb(40, 42, 54);       // Dark Background
+const PALETTE_BG_DARK: Color = Color::Rgb(30, 30, 46);       // Darker Background
 const PALETTE_FG: Color = Color::Rgb(248, 248, 242);         // Foreground
 const PALETTE_GRAY: Color = Color::Rgb(98, 114, 164);        // Gray
 const PALETTE_BG_LIGHTER: Color = Color::Rgb(68, 71, 90);    // Lighter Background
@@ -94,18 +94,41 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.loading && app.snapshots.is_empty() {
         draw_loading_screen(f, app);
     } else {
+        // Create a "floating" layout with gaps
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5), // Header (increased for ASCII art)
+                Constraint::Length(1), // Top Gap
+                Constraint::Length(5), // Header
+                Constraint::Length(1), // Gap
                 Constraint::Min(0),    // Main
+                Constraint::Length(1), // Gap
                 Constraint::Length(3), // Footer
+                Constraint::Length(1), // Bottom Gap
             ])
             .split(f.area());
 
-        draw_header(f, chunks[0]);
-        draw_main(f, app, chunks[1]);
-        draw_actions_bar(f, chunks[2]);
+        // Add horizontal padding
+        let main_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(2), // Left Gap
+                Constraint::Min(0),    // Content
+                Constraint::Length(2), // Right Gap
+            ])
+            .split(f.area());
+        
+        // Intersect vertical chunks with horizontal padding
+        // We'll pass the specific areas to the draw functions
+        
+        // Helper to intersect rects (simple version for this layout)
+        let header_area = intersection(chunks[1], main_layout[1]);
+        let main_area = intersection(chunks[3], main_layout[1]);
+        let footer_area = intersection(chunks[5], main_layout[1]);
+
+        draw_header(f, header_area);
+        draw_main(f, app, main_area);
+        draw_actions_bar(f, footer_area);
     }
 
     // Render TachyonFX effects
@@ -227,6 +250,14 @@ fn draw_loading_screen(f: &mut Frame, app: &mut App) {
     f.render_widget(block, area);
 }
 
+fn intersection(r1: Rect, r2: Rect) -> Rect {
+    let x = r1.x.max(r2.x);
+    let y = r1.y.max(r2.y);
+    let width = (r1.x + r1.width).min(r2.x + r2.width).saturating_sub(x);
+    let height = (r1.y + r1.height).min(r2.y + r2.height).saturating_sub(y);
+    Rect { x, y, width, height }
+}
+
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -248,15 +279,16 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
-    // Custom header with large styled text (utilizing 5 row height)
+    // Custom header with large styled text
     let header_text = vec![
         Line::from(""), // Empty line for spacing
         Line::from(vec![
-            Span::styled("  █▀▀ █▄░█ ▄▀█ █▀█ █▀█ █▀▀ █▀█ ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled("  🔮 SNAPPER ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+            Span::styled("TUI ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled("⚡ ", Style::default().fg(PALETTE_WARNING)),
         ]),
         Line::from(vec![
-            Span::styled("  ▄█  █░▀█ █▀█ █▀▀ █▀▀ ██▄ █▀▄ ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)),
-            Span::styled(" TUI", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::ITALIC)),
+            Span::styled("  Cyberpunk Edition ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::ITALIC)),
         ]),
         Line::from(""), // Empty line for spacing
     ];
@@ -266,8 +298,9 @@ fn draw_header(f: &mut Frame, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(PALETTE_SECONDARY))
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(PALETTE_PRIMARY))
+                .style(Style::default().bg(PALETTE_BG_DARK))
         );
 
     f.render_widget(header, area);
@@ -278,12 +311,14 @@ fn draw_main(f: &mut Frame, app: &mut App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage(50), // Snapshot list
-            Constraint::Percentage(50), // Right Panel (Details + Status)
+            Constraint::Length(1),      // Gap
+            Constraint::Min(0),         // Right Panel (Details + Status)
         ])
         .split(area);
 
     draw_snapshot_table(f, app, chunks[0]);
-    draw_right_panel(f, app, chunks[1]);
+    // chunks[1] is gap
+    draw_right_panel(f, app, chunks[2]);
 }
 
 fn draw_right_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -291,12 +326,14 @@ fn draw_right_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Percentage(40), // Details
-            Constraint::Percentage(60), // Status
+            Constraint::Length(1),      // Gap
+            Constraint::Min(0),         // Status
         ])
         .split(area);
 
     draw_details_panel(f, app, chunks[0]);
-    draw_status_panel(f, app, chunks[1]);
+    // chunks[1] is gap
+    draw_status_panel(f, app, chunks[2]);
 }
 
 fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
@@ -305,17 +342,17 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
     // Modern header with primary color and sort indicators
     let header_cells = vec![
         Cell::from(format!("📸 #{}", app.get_sort_indicator(SortKey::Number)))
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        Cell::from(format!("Type{}", app.get_sort_indicator(SortKey::Type)))
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        Cell::from(format!("Date{}", app.get_sort_indicator(SortKey::Date)))
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        Cell::from(format!("User{}", app.get_sort_indicator(SortKey::User)))
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        Cell::from(format!("Space{}", app.get_sort_indicator(SortKey::UsedSpace)))
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        Cell::from("Description")
-            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("🏷️ Type{}", app.get_sort_indicator(SortKey::Type)))
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("📅 Date{}", app.get_sort_indicator(SortKey::Date)))
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("👤 User{}", app.get_sort_indicator(SortKey::User)))
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("💾 Space{}", app.get_sort_indicator(SortKey::UsedSpace)))
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from("📝 Description")
+            .style(Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
     ];
     let header = Row::new(header_cells)
         .style(Style::default().bg(PALETTE_PRIMARY))
@@ -324,7 +361,7 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
     // Zebra striping with modern colors
     let rows = app.snapshots.iter().enumerate().map(|(idx, item)| {
         let is_selected = app.selected_indices.contains(&idx);
-        let selection_marker = if is_selected { "✓ " } else { "" };
+        let selection_marker = if is_selected { "✅ " } else { "" };
         
         let cells = vec![
             Cell::from(format!("{}{}", selection_marker, item.number)),
@@ -335,17 +372,17 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
             Cell::from(item.description.clone()),
         ];
         // Zebra striping
-        let bg = if idx % 2 == 0 { Color::Black } else { PALETTE_BG_LIGHTER };
+        let bg = if idx % 2 == 0 { PALETTE_BG_DARK } else { PALETTE_BG_LIGHTER };
         Row::new(cells).height(1).style(Style::default().bg(bg).fg(PALETTE_FG))
     });
 
     let t = Table::new(
         rows,
         [
-            Constraint::Length(6),
             Constraint::Length(8),
-            Constraint::Length(20),
             Constraint::Length(10),
+            Constraint::Length(22),
+            Constraint::Length(12),
             Constraint::Length(12),
             Constraint::Min(10),
         ],
@@ -354,12 +391,14 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
+                .border_type(BorderType::Double)
                 .border_style(Style::default().fg(PALETTE_SECONDARY))
-                .title(Span::styled(" 📦 Snapshots ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(" 📦 SNAPSHOTS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)))
+                .title_alignment(Alignment::Center)
+                .style(Style::default().bg(PALETTE_BG_DARK))
         )
-        .highlight_style(Style::default().bg(PALETTE_PRIMARY).fg(PALETTE_FG).add_modifier(Modifier::BOLD))
-        .highlight_symbol("▶ ");
+        .highlight_style(Style::default().bg(PALETTE_ACCENT).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD))
+        .highlight_symbol("👉 ");
 
     f.render_stateful_widget(t, area, &mut app.table_state);
 }
@@ -377,43 +416,43 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
 
         vec![
             Line::from(vec![
-                Span::styled("Config: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("⚙️ Config: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.config, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Subvolume: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("📂 Subvolume: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.subvolume, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Number: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("🔢 Number: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(snap.number.to_string(), Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Type: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("🏷️ Type: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.snapshot_type, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Date: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("📅 Date: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.date, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("User: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("👤 User: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.user, Style::default().fg(PALETTE_SUCCESS)),
             ]),
             Line::from(vec![
-                Span::styled("Cleanup: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("🧹 Cleanup: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(snap.cleanup.as_deref().unwrap_or("-"), Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Description: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("📝 Description: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(&snap.description, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Used Space: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("💾 Used Space: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(snap.used_space.map(|s| s.to_string()).unwrap_or_default(), Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
-                Span::styled("Userdata: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("📋 Userdata: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
                 Span::styled(userdata_str, Style::default().fg(PALETTE_FG)),
             ]),
         ]
@@ -425,10 +464,11 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(PALETTE_SECONDARY))
-                .title(Span::styled(" 📝 Details ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)))
-                .style(Style::default().bg(Color::Black))
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(PALETTE_ACCENT))
+                .title(Span::styled(" 🔍 DETAILS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)))
+                .title_alignment(Alignment::Center)
+                .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
         .scroll((app.details_scroll as u16, 0));
@@ -437,7 +477,7 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
-    let mut title = String::from("ℹ️ Status");
+    let mut title = String::from(" ℹ️ STATUS ");
     if app.loading {
         title.push_str(&format!(" {}", app.spinner_frames[app.spinner_state]));
     }
@@ -455,10 +495,11 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(PALETTE_SECONDARY))
-                .title(Span::styled(title, Style::default().fg(PALETTE_WARNING).add_modifier(Modifier::BOLD)))
-                .style(Style::default().bg(Color::Black))
+                .border_type(BorderType::Double)
+                .border_style(Style::default().fg(PALETTE_WARNING))
+                .title(Span::styled(title, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_WARNING).add_modifier(Modifier::BOLD)))
+                .title_alignment(Alignment::Center)
+                .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
         .scroll((app.status_scroll as u16, 0));
@@ -467,19 +508,20 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_actions_bar(f: &mut Frame, area: Rect) {
     let actions_text = vec![
-        Span::styled(" Actions: ", Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled("[D]elete ", Style::default().bg(Color::Red).fg(Color::White)),
+        Span::styled(" ⚡ ACTIONS: ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Span::styled(" [D]elete 🗑️  ", Style::default().bg(PALETTE_ERROR).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled("[a]pply ", Style::default().bg(Color::Green).fg(Color::Black)),
+        Span::styled(" [A]pply ↩️  ", Style::default().bg(PALETTE_SUCCESS).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled("[S]tatus ", Style::default().bg(Color::Blue).fg(Color::White)),
+        Span::styled(" [S]tatus ℹ️  ", Style::default().bg(PALETTE_SECONDARY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled("[r]efresh ", Style::default().bg(Color::Yellow).fg(Color::Black)),
+        Span::styled(" [R]efresh 🔄 ", Style::default().bg(PALETTE_WARNING).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
         Span::raw(" "),
-        Span::styled("[q]uit ", Style::default().bg(Color::Gray).fg(Color::Black)),
+        Span::styled(" [Q]uit 🚪 ", Style::default().bg(PALETTE_GRAY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
     ];
     
     let actions = Paragraph::new(Line::from(actions_text))
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded));
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).border_style(Style::default().fg(PALETTE_GRAY)).style(Style::default().bg(PALETTE_BG_DARK)));
     f.render_widget(actions, area);
 }

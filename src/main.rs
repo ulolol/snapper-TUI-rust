@@ -64,13 +64,13 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 match result {
                     Ok(snapshots) => {
                         app.snapshots = snapshots;
-                        app.message = format!("Loaded {} snapshots.", app.snapshots.len());
+                        app.message = format!("✅ Loaded {} snapshots.", app.snapshots.len());
                         if !app.snapshots.is_empty() {
                             app.table_state.select(Some(0));
                         }
                     }
                     Err(e) => {
-                        app.message = format!("Error loading snapshots: {}", e);
+                        app.message = format!("❌ Error loading snapshots: {}", e);
                     }
                 }
             }
@@ -118,7 +118,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             app.loading = true;
-                            app.message = String::from("Refreshing...");
+                            app.message = String::from("🔄 Refreshing...");
                             app.snapshots.clear();
                             
                             let (tx, rx) = mpsc::channel();
@@ -130,7 +130,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         KeyCode::Char('a') | KeyCode::Char('A') => {
                             if app.get_selected_count() > 0 {
-                                app.message = "Error: Cannot apply with multi-selection active. Clear selections first (select with space to deselect).".to_string();
+                                app.message = "❌ Error: Cannot apply with multi-selection active. Clear selections first (select with space to deselect).".to_string();
                             } else {
                                 app.show_apply_popup = true;
                             }
@@ -146,7 +146,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         KeyCode::Char('d') | KeyCode::Char('D') => app.show_delete_popup = true,
                         KeyCode::Char('s') | KeyCode::Char('S') => {
                             if app.get_selected_count() > 0 {
-                                app.message = "Error: Cannot get status with multi-selection active. Clear selections first.".to_string();
+                                app.message = "❌ Error: Cannot get status with multi-selection active. Clear selections first.".to_string();
                             } else {
                                 app.get_status_selected_snapshot();
                             }
@@ -213,7 +213,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 else if col >= 30 && col < 40 { app.get_status_selected_snapshot(); }
                                 else if col >= 40 && col < 50 { 
                                     app.loading = true;
-                                    app.message = String::from("Refreshing...");
+                                    app.message = String::from("🔄 Refreshing...");
                                     app.snapshots.clear();
                                     let (tx, rx) = mpsc::channel();
                                     app.rx = Some(rx);

@@ -1,6 +1,6 @@
 use crate::data::{self, Snapshot};
 use ratatui::widgets::TableState;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::collections::HashSet;
 use tachyonfx::Effect;
 
@@ -39,7 +39,7 @@ impl App {
         App {
             snapshots: Vec::new(),
             table_state: TableState::default(),
-            message: String::from("Initializing..."),
+            message: String::from("⚡ Initializing..."),
             loading: true, // Start loading immediately
             status_text: String::new(),
             details_scroll: 0,
@@ -61,21 +61,21 @@ impl App {
 
     pub fn refresh_snapshots(&mut self) {
         self.loading = true;
-        self.message = String::from("Fetching snapshots...");
+        self.message = String::from("🔄 Fetching snapshots...");
         
         match data::list_snapshots() {
             Ok(snapshots) => {
                 self.snapshots = snapshots;
                 self.sort_snapshots();
                 self.loading = false;
-                self.message = String::from("Snapshots loaded.");
+                self.message = String::from("✅ Snapshots loaded.");
                 if !self.snapshots.is_empty() {
                     self.table_state.select(Some(0));
                 }
             }
             Err(e) => {
                 self.loading = false;
-                self.message = format!("Error: {}", e);
+                self.message = format!("❌ Error: {}", e);
             }
         }
     }
@@ -145,15 +145,15 @@ impl App {
         // Update message
         if success_count > 0 {
             self.message = if success_count == 1 {
-                format!("Deleted 1 snapshot")
+                format!("🗑️ Deleted 1 snapshot")
             } else {
-                format!("Deleted {} snapshots", success_count)
+                format!("🗑️ Deleted {} snapshots", success_count)
             };
             if error_count > 0 {
-                self.message.push_str(&format!(" ({} failed)", error_count));
+                self.message.push_str(&format!(" ({} failed ❌)", error_count));
             }
         } else if error_count > 0 {
-            self.message = format!("Failed to delete {} snapshot(s)", error_count);
+            self.message = format!("❌ Failed to delete {} snapshot(s)", error_count);
         }
 
         // Clear selections and refresh
@@ -164,13 +164,13 @@ impl App {
     pub fn apply_selected_snapshot(&mut self) {
         if let Some(snap) = self.get_selected_snapshot() {
             let number = snap.number;
-            self.message = format!("Applying snapshot {} (Rollback)...", number);
+            self.message = format!("⏳ Applying snapshot {} (Rollback)...", number);
             match data::rollback_snapshot(number) {
                 Ok(_) => {
-                    self.message = format!("Snapshot {} applied. Reboot to take effect.", number);
+                    self.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
                 }
                 Err(e) => {
-                    self.message = format!("Error applying snapshot: {}", e);
+                    self.message = format!("❌ Error applying snapshot: {}", e);
                 }
             }
         }
@@ -178,15 +178,15 @@ impl App {
     
     pub fn get_status_selected_snapshot(&mut self) {
          if let Some(snap) = self.get_selected_snapshot().cloned() {
-            self.message = format!("Fetching status for {}...", snap.number);
+            self.message = format!("⏳ Fetching status for {}...", snap.number);
             match data::get_snapshot_status(&snap) {
                 Ok(status) => {
                     self.status_text = status;
-                    self.message = format!("Status loaded for snapshot {}.", snap.number);
+                    self.message = format!("✅ Status loaded for snapshot {}.", snap.number);
                     self.status_scroll = 0; // Reset scroll
                 }
                 Err(e) => {
-                    self.message = format!("Error getting status: {}", e);
+                    self.message = format!("❌ Error getting status: {}", e);
                     self.status_text.clear();
                 }
             }
