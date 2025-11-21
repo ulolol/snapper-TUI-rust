@@ -105,6 +105,18 @@ pub fn get_snapshot_status(snap: &Snapshot) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+pub fn create_snapshot(description: &str) -> Result<()> {
+    let status = Command::new("sudo")
+        .args(&["snapper", "create", "--description", description])
+        .status()
+        .context("Failed to execute snapper create")?;
+
+    if !status.success() {
+        anyhow::bail!("Failed to create snapshot");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
