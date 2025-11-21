@@ -168,10 +168,13 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             let is_scroll_up = matches!(mouse.kind, event::MouseEventKind::ScrollUp);
                             
                             // Calculate layout boundaries
-                            let header_height = 3;
+                            // Calculate layout boundaries
+                            // Layout: TopGap(1) + Header(5) + Gap(1) + Main + Gap(1) + Footer(3) + BottomGap(1)
+                            let header_offset = 7; // 1 + 5 + 1
                             let footer_height = 3;
-                            let main_area_start = header_height;
-                            let main_area_end = term_size.height.saturating_sub(footer_height);
+                            let bottom_gap = 1;
+                            let main_area_start = header_offset;
+                            let main_area_end = term_size.height.saturating_sub(footer_height + bottom_gap + 1); // +1 for the gap above footer
                             
                             // Check if mouse is in main area
                             if mouse.row >= main_area_start && mouse.row < main_area_end {
@@ -198,12 +201,12 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         event::MouseEventKind::Down(event::MouseButton::Left) => {
                             let term_size = terminal.size()?;
-                            let footer_row = term_size.height.saturating_sub(3);
-                            let is_in_footer = mouse.row >= footer_row;
+                            // Footer starts at Height - BottomGap(1) - Footer(3)
+                            let footer_row = term_size.height.saturating_sub(4);
+                            let is_in_footer = mouse.row >= footer_row && mouse.row < term_size.height.saturating_sub(1);
                             
-                            // Layout: Header (5 rows), Main area, Footer (3 rows)
-                            let header_height = 5;
-                            let main_area_start = header_height;
+                            // Layout: TopGap(1) + Header(5) + Gap(1) = 7
+                            let main_area_start = 7;
                             
                             if is_in_footer {
                                 // Footer button clicks
@@ -226,8 +229,13 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             } else if mouse.row >= main_area_start && mouse.row < footer_row {
                                 // Main area - check if left panel (table)
                                 let half_width = term_size.width / 2;
+                                let left_padding = 2;
                                 
-                                if mouse.column < half_width {
+                                if mouse.column >= left_padding && mouse.column < half_width {
+                                    // Adjust column for padding
+                                    let effective_col = mouse.column - left_padding;
+                                    // Table block starts at main_area_start
+                                    // Border = 1 row, Header = 1 row
                                     // Table block starts at main_area_start
                                     // Border = 1 row, Header = 1 row
                                     let table_border_top = main_area_start;
@@ -236,19 +244,24 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                     
                                     if mouse.row == table_header_row {
                                         // Clicked on table header - determine column for sorting
-                                        let col_x = mouse.column;
+                                        let col_x = effective_col;
                                         
-                                        // Column boundaries (approximate based on constraints)
-                                        // [6] [8] [20] [10] [12] [Min10]
-                                        if col_x < 7 {
+                                        // Column boundaries based on UI constraints:
+                                        // Border: 1
+                                        // Col 1 (Number): 8 -> End 9
+                                        // Col 2 (Type): 10 -> End 19
+                                        // Col 3 (Date): 22 -> End 41
+                                        // Col 4 (User): 12 -> End 53
+                                        // Col 5 (Space): 12 -> End 65
+                                        if col_x < 9 {
                                             app.set_sort_key(crate::app::SortKey::Number);
-                                        } else if col_x < 16 {
+                                        } else if col_x < 19 {
                                             app.set_sort_key(crate::app::SortKey::Type);
-                                        } else if col_x < 37 {
+                                        } else if col_x < 41 {
                                             app.set_sort_key(crate::app::SortKey::Date);
-                                        } else if col_x < 48 {
+                                        } else if col_x < 53 {
                                             app.set_sort_key(crate::app::SortKey::User);
-                                        } else if col_x < 61 {
+                                        } else if col_x < 65 {
                                             app.set_sort_key(crate::app::SortKey::UsedSpace);
                                         }
                                     } else if mouse.row >= first_data_row {
