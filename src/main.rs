@@ -128,11 +128,36 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 let _ = tx.send(res);
                             });
                         }
-                        KeyCode::Char('a') | KeyCode::Char('A') => app.show_apply_popup = true,
-                        KeyCode::Down => app.next(),
-                        KeyCode::Up => app.previous(),
+                        KeyCode::Char('a') | KeyCode::Char('A') => {
+                            if app.get_selected_count() > 0 {
+                                app.message = "Error: Cannot apply with multi-selection active. Clear selections first (select with space to deselect).".to_string();
+                            } else {
+                                app.show_apply_popup = true;
+                            }
+                        }
+                        KeyCode::Down => {
+                            app.next();
+                            app.get_status_selected_snapshot(); // Auto-show status
+                        }
+                        KeyCode::Up => {
+                            app.previous();
+                            app.get_status_selected_snapshot(); // Auto-show status
+                        }
                         KeyCode::Char('d') | KeyCode::Char('D') => app.show_delete_popup = true,
-                        KeyCode::Char('s') | KeyCode::Char('S') => app.get_status_selected_snapshot(),
+                        KeyCode::Char('s') | KeyCode::Char('S') => {
+                            if app.get_selected_count() > 0 {
+                                app.message = "Error: Cannot get status with multi-selection active. Clear selections first.".to_string();
+                            } else {
+                                app.get_status_selected_snapshot();
+                            }
+                        }
+                        KeyCode::Char(' ') => app.toggle_selection(),
+                        // Sorting keybinds
+                        KeyCode::Char('1') => app.set_sort_key(crate::app::SortKey::Number),
+                        KeyCode::Char('2') => app.set_sort_key(crate::app::SortKey::Type),
+                        KeyCode::Char('3') => app.set_sort_key(crate::app::SortKey::Date),
+                        KeyCode::Char('4') => app.set_sort_key(crate::app::SortKey::User),
+                        KeyCode::Char('5') => app.set_sort_key(crate::app::SortKey::UsedSpace),
                         _ => {}
                     }
                 }
@@ -176,20 +201,17 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             let footer_row = term_size.height.saturating_sub(3);
                             let is_in_footer = mouse.row >= footer_row;
                             
-                            // Simple layout assumptions for hit testing
-                            // Header: 3 rows (0, 1, 2)
-                            // Main: Row 3 to footer_row - 1
-                            // Footer: footer_row to end
+                            // Layout: Header (5 rows), Main area, Footer (3 rows)
+                            let header_height = 5;
+                            let main_area_start = header_height;
                             
                             if is_in_footer {
-                                // Simple hit testing for buttons based on text position
-                                // Actions: [D]elete [a]pply [S]tatus [r]efresh [q]uit
+                                // Footer button clicks
                                 let col = mouse.column;
                                 if col >= 10 && col < 20 { app.show_delete_popup = true; }
                                 else if col >= 20 && col < 30 { app.show_apply_popup = true; }
                                 else if col >= 30 && col < 40 { app.get_status_selected_snapshot(); }
                                 else if col >= 40 && col < 50 { 
-                                    // Refresh logic duplicated for now
                                     app.loading = true;
                                     app.message = String::from("Refreshing...");
                                     app.snapshots.clear();
@@ -201,35 +223,42 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                     });
                                 }
                                 else if col >= 50 && col < 60 { return Ok(()); }
-                            } else if mouse.row >= 3 && mouse.row < footer_row {
-                                // Main area
-                                let width = term_size.width;
-                                let is_in_left_panel = mouse.column < width / 2;
+                            } else if mouse.row >= main_area_start && mouse.row < footer_row {
+                                // Main area - check if left panel (table)
+                                let half_width = term_size.width / 2;
                                 
-                                if is_in_left_panel {
-                                    // Snapshot Table Click
-                                    // Header of table is 1 row (inside the block), block border is 1 row.
-                                    // So table content starts at: Header(3) + Border(1) + TableHeader(1) = Row 5?
-                                    // Let's approximate: Header is 3 rows. Table block starts at row 3.
-                                    // Table block border top is row 3. Table header is row 4. First data row is row 5.
+                                if mouse.column < half_width {
+                                    // Table block starts at main_area_start
+                                    // Border = 1 row, Header = 1 row
+                                    let table_border_top = main_area_start;
+                                    let table_header_row = table_border_top + 1;
+                                    let first_data_row = table_header_row + 1;
                                     
-                                    let header_height = 3; // App header
-                                    let table_header_height = 2; // Border + Header row
-                                    let first_data_row = header_height + table_header_height;
-                                    
-                                    if mouse.row >= first_data_row {
-                                        let index_in_view = (mouse.row - first_data_row) as usize;
-                                        // We need to account for table scroll offset if we had it exposed.
-                                        // For now, assuming list fits or simple scrolling:
-                                        // Ratatui TableState doesn't easily expose offset without tracking it ourselves.
-                                        // But we can try to select based on visual index if we assume top is 0 for now
-                                        // or if we implement offset tracking in App.
+                                    if mouse.row == table_header_row {
+                                        // Clicked on table header - determine column for sorting
+                                        let col_x = mouse.column;
                                         
-                                        // Since we don't track offset yet, this is "best effort" for visible rows
-                                        // assuming the table is scrolled to top or we track it.
-                                        // TODO: Implement proper offset tracking in App::next/previous to make this perfect.
-                                        if index_in_view < app.snapshots.len() {
-                                            app.table_state.select(Some(index_in_view));
+                                        // Column boundaries (approximate based on constraints)
+                                        // [6] [8] [20] [10] [12] [Min10]
+                                        if col_x < 7 {
+                                            app.set_sort_key(crate::app::SortKey::Number);
+                                        } else if col_x < 16 {
+                                            app.set_sort_key(crate::app::SortKey::Type);
+                                        } else if col_x < 37 {
+                                            app.set_sort_key(crate::app::SortKey::Date);
+                                        } else if col_x < 48 {
+                                            app.set_sort_key(crate::app::SortKey::User);
+                                        } else if col_x < 61 {
+                                            app.set_sort_key(crate::app::SortKey::UsedSpace);
+                                        }
+                                    } else if mouse.row >= first_data_row {
+                                        // Clicked on table body - select row
+                                        let row_offset = mouse.row.saturating_sub(first_data_row);
+                                        let target_index = row_offset as usize;
+                                        
+                                        if target_index < app.snapshots.len() {
+                                            app.table_state.select(Some(target_index));
+                                            app.get_status_selected_snapshot(); // Auto-show status
                                         }
                                     }
                                 }
