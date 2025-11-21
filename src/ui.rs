@@ -1,14 +1,27 @@
 use crate::app::App;
 use ratatui::{
+    prelude::*,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, BorderType, Cell, Paragraph, Row, Table, TableState, Wrap, Clear},
     Frame,
 };
 use tachyonfx::{
     fx, Duration, Effect, EffectRenderer, Interpolation,
 };
+
+// Modern Color Palette (GitHub Dark / Dracula inspired)
+const PALETTE_PRIMARY: Color = Color::Rgb(189, 147, 249);    // Deep Purple
+const PALETTE_SECONDARY: Color = Color::Rgb(139, 233, 253);  // Cyan
+const PALETTE_ACCENT: Color = Color::Rgb(255, 121, 198);     // Pink
+const PALETTE_SUCCESS: Color = Color::Rgb(80, 250, 123);     // Green
+const PALETTE_WARNING: Color = Color::Rgb(241, 250, 140);    // Yellow
+const PALETTE_ERROR: Color = Color::Rgb(255, 85, 85);        // Red
+const PALETTE_BG_DARK: Color = Color::Rgb(40, 42, 54);       // Dark Background
+const PALETTE_FG: Color = Color::Rgb(248, 248, 242);         // Foreground
+const PALETTE_GRAY: Color = Color::Rgb(98, 114, 164);        // Gray
+const PALETTE_BG_LIGHTER: Color = Color::Rgb(68, 71, 90);    // Lighter Background
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     // Splash Screen - simple custom implementation
@@ -17,11 +30,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             if start.elapsed().as_secs() >= 2 {
                 app.show_splash = false;
             } else {
-                // Render simple centered splash
+                // Render simple centered splash with gradient colors
                 let block = Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .style(Style::default().bg(Color::Black).fg(Color::Cyan));
+                    .border_type(BorderType::Double)
+                    .border_style(Style::default().fg(PALETTE_PRIMARY))
+                    .style(Style::default().bg(Color::Black));
                 f.render_widget(block, f.area());
                 
                 let text = vec![
@@ -29,15 +43,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                     Line::from(""),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "⚡ SNAPPER TUI ⚡",
+                        "█▀▀ █▄░█ █▀█ █▀█ █▀█ █▀▀ █▀█",
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(PALETTE_PRIMARY)
                             .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        "▄█  █░▀█ █▀█ █▀▀ █▀▀ ██▄ █▀▄",
+                        Style::default()
+                            .fg(PALETTE_SECONDARY)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        "              TUI",
+                        Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::ITALIC),
                     )),
                     Line::from(""),
                     Line::from(Span::styled(
-                        "Initializing System...",
-                        Style::default().fg(Color::Gray),
+                        "⚡ Initializing System...",
+                        Style::default().fg(PALETTE_WARNING),
                     )),
                 ];
                 
@@ -45,8 +69,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 let center = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
-                        Constraint::Percentage(40),
-                        Constraint::Length(6),
+                        Constraint::Percentage(35),
+                        Constraint::Length(9),
                         Constraint::Percentage(40),
                     ])
                     .split(f.area())[1];
@@ -73,9 +97,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Header
-                Constraint::Min(0),    // Main content
-                Constraint::Length(3), // Footer/Actions
+                Constraint::Length(5), // Header (increased for ASCII art)
+                Constraint::Min(0),    // Main
+                Constraint::Length(3), // Footer
             ])
             .split(f.area());
 
@@ -93,18 +117,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Custom Popups - render on top
     if app.show_delete_popup {
+        let count = if app.get_selected_count() > 0 {
+            app.get_selected_count()
+        } else {
+            1
+        };
+        
+        let message = if count > 1 {
+            format!("Delete {} selected snapshots?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel", count)
+        } else {
+            "Delete selected snapshot?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel".to_string()
+        };
+        
         draw_popup(
             f,
-            "⚠ Delete Snapshot ⚠",
-            "Are you sure you want to delete this snapshot?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel",
-            Color::Red,
+            "🗑 DELETE SNAPSHOT 🗑",
+            &message,
+            PALETTE_ERROR,
         );
     } else if app.show_apply_popup {
         draw_popup(
             f,
-            "⚡ Apply Snapshot ⚡",
+            "⚡ APPLY SNAPSHOT ⚡",
             "Are you sure you want to rollback to this snapshot?\n\nSystem will need a reboot to take effect.\n\n[Enter] Confirm  [Esc] Cancel",
-            Color::Yellow,
+            PALETTE_WARNING,
         );
     }
 }
@@ -112,49 +148,62 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 fn draw_popup(f: &mut Frame, title: &str, message: &str, border_color: Color) {
     let area = f.area();
     
-    // Create centered popup area (60% width, 40% height)
+    // Create centered popup area (65% width, 45% height for better readability)
     let popup_area = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(30),
-            Constraint::Percentage(40),
-            Constraint::Percentage(30),
+            Constraint::Percentage(28),
+            Constraint::Percentage(44),
+            Constraint::Percentage(28),
         ])
         .split(area)[1];
     
     let popup_area = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(60),
-            Constraint::Percentage(20),
+            Constraint::Percentage(17),
+            Constraint::Percentage(66),
+            Constraint::Percentage(17),
         ])
         .split(popup_area)[1];
     
-    // Clear the popup area
-    let clear = Block::default().style(Style::default().bg(Color::Black));
-    f.render_widget(clear, popup_area);
+    // CRITICAL: Use Clear widget to make popup opaque
+    // This clears the area so background doesn't bleed through
+    f.render_widget(Clear, popup_area);
     
-    // Render popup border
+    // Render fully opaque black background for legibility
+    let dark_bg = Block::default()
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(dark_bg, popup_area);
+    
+    // Render popup border with modern double-line style
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .title(title)
+        .title(Span::styled(title, Style::default().fg(border_color).add_modifier(Modifier::BOLD)))
         .title_alignment(Alignment::Center)
-        .style(Style::default().bg(Color::Black).fg(border_color));
+        .border_style(Style::default().fg(border_color))
+        .style(Style::default().bg(Color::Black));
     
     let inner = block.inner(popup_area);
+    
+    // Fill inner area with black background too
+    let inner_bg = Block::default()
+        .style(Style::default().bg(Color::Black));
+    f.render_widget(inner_bg, inner);
+    
     f.render_widget(block, popup_area);
     
-    // Render message
+    // Render message with bright white text for maximum contrast
     let para = Paragraph::new(message)
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true })
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(Color::White).bg(Color::Black));
     
+    // Center the text vertically within the popup
     let text_area = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
+        .constraints([Constraint::Percentage(15), Constraint::Percentage(70), Constraint::Percentage(15)])
         .split(inner)[1];
     
     f.render_widget(para, text_area);
@@ -199,10 +248,29 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 fn draw_header(f: &mut Frame, area: Rect) {
-    let text = Paragraph::new("Snapper TUI (Rust Port)")
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded));
-    f.render_widget(text, area);
+    // Custom header with large styled text (utilizing 5 row height)
+    let header_text = vec![
+        Line::from(""), // Empty line for spacing
+        Line::from(vec![
+            Span::styled("  █▀▀ █▄░█ ▄▀█ █▀█ █▀█ █▀▀ █▀█ ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ▄█  █░▀█ █▀█ █▀▀ █▀▀ ██▄ █▀▄ ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)),
+            Span::styled(" TUI", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::ITALIC)),
+        ]),
+        Line::from(""), // Empty line for spacing
+    ];
+
+    let header = Paragraph::new(header_text)
+        .alignment(Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(PALETTE_SECONDARY))
+        );
+
+    f.render_widget(header, area);
 }
 
 fn draw_main(f: &mut Frame, app: &mut App, area: Rect) {
@@ -232,23 +300,43 @@ fn draw_right_panel(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
-    let header_cells = ["#", "Type", "Date", "User", "Used Space", "Description"]
-        .iter()
-        .map(|h| Cell::from(*h).style(Style::default().fg(Color::Black).bg(Color::Cyan)));
+    use crate::app::{format_size, SortKey};
+    
+    // Modern header with primary color and sort indicators
+    let header_cells = vec![
+        Cell::from(format!("📸 #{}", app.get_sort_indicator(SortKey::Number)))
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("Type{}", app.get_sort_indicator(SortKey::Type)))
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("Date{}", app.get_sort_indicator(SortKey::Date)))
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("User{}", app.get_sort_indicator(SortKey::User)))
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from(format!("Space{}", app.get_sort_indicator(SortKey::UsedSpace)))
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        Cell::from("Description")
+            .style(Style::default().fg(PALETTE_FG).bg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+    ];
     let header = Row::new(header_cells)
-        .style(Style::default().bg(Color::Cyan))
+        .style(Style::default().bg(PALETTE_PRIMARY))
         .height(1);
 
-    let rows = app.snapshots.iter().map(|item| {
+    // Zebra striping with modern colors
+    let rows = app.snapshots.iter().enumerate().map(|(idx, item)| {
+        let is_selected = app.selected_indices.contains(&idx);
+        let selection_marker = if is_selected { "✓ " } else { "" };
+        
         let cells = vec![
-            Cell::from(item.number.to_string()),
+            Cell::from(format!("{}{}", selection_marker, item.number)),
             Cell::from(item.snapshot_type.clone()),
             Cell::from(item.date.clone()),
             Cell::from(item.user.clone()),
-            Cell::from(item.used_space.map(|s| s.to_string()).unwrap_or_default()),
+            Cell::from(item.used_space.map(|s| format_size(s)).unwrap_or_default()),
             Cell::from(item.description.clone()),
         ];
-        Row::new(cells).height(1)
+        // Zebra striping
+        let bg = if idx % 2 == 0 { Color::Black } else { PALETTE_BG_LIGHTER };
+        Row::new(cells).height(1).style(Style::default().bg(bg).fg(PALETTE_FG))
     });
 
     let t = Table::new(
@@ -263,15 +351,23 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("Snapshots"))
-    .highlight_style(Style::default().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
-    .highlight_symbol(">> ");
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(PALETTE_SECONDARY))
+                .title(Span::styled(" 📦 Snapshots ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)))
+        )
+        .highlight_style(Style::default().bg(PALETTE_PRIMARY).fg(PALETTE_FG).add_modifier(Modifier::BOLD))
+        .highlight_symbol("▶ ");
 
     f.render_stateful_widget(t, area, &mut app.table_state);
 }
 
-fn draw_details_panel(f: &mut Frame, app: &App, area: Rect) {
-    let details_text = if let Some(snap) = app.get_selected_snapshot() {
+fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let selected = app.get_selected_snapshot();
+
+    let content = if let Some(snap) = selected {
         let userdata_str = snap.userdata.as_ref().map(|m| {
             m.iter()
                 .map(|(k, v)| format!("{}: {}", k, v))
@@ -280,48 +376,92 @@ fn draw_details_panel(f: &mut Frame, app: &App, area: Rect) {
         }).unwrap_or_default();
 
         vec![
-            Line::from(vec![Span::styled("Config: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.config)]),
-            Line::from(vec![Span::styled("Subvolume: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.subvolume)]),
-            Line::from(vec![Span::styled("Number: ", Style::default().fg(Color::Cyan)), Span::raw(snap.number.to_string())]),
-            Line::from(vec![Span::styled("Type: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.snapshot_type)]),
-            Line::from(vec![Span::styled("Date: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.date)]),
-            Line::from(vec![Span::styled("User: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.user)]),
-            Line::from(vec![Span::styled("Cleanup: ", Style::default().fg(Color::Cyan)), Span::raw(snap.cleanup.as_deref().unwrap_or("-"))]),
-            Line::from(vec![Span::styled("Description: ", Style::default().fg(Color::Cyan)), Span::raw(&snap.description)]),
-            Line::from(vec![Span::styled("Used Space: ", Style::default().fg(Color::Cyan)), Span::raw(snap.used_space.map(|s| s.to_string()).unwrap_or_default())]),
-            Line::from(vec![Span::styled("Userdata: ", Style::default().fg(Color::Cyan)), Span::raw(userdata_str)]),
+            Line::from(vec![
+                Span::styled("Config: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.config, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Subvolume: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.subvolume, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Number: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(snap.number.to_string(), Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Type: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.snapshot_type, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Date: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.date, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("User: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.user, Style::default().fg(PALETTE_SUCCESS)),
+            ]),
+            Line::from(vec![
+                Span::styled("Cleanup: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(snap.cleanup.as_deref().unwrap_or("-"), Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Description: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(&snap.description, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Used Space: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(snap.used_space.map(|s| s.to_string()).unwrap_or_default(), Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(vec![
+                Span::styled("Userdata: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(userdata_str, Style::default().fg(PALETTE_FG)),
+            ]),
         ]
     } else {
-        vec![Line::from("Select a snapshot to view details.")]
+        vec![Line::from(Span::styled("No snapshot selected.", Style::default().fg(PALETTE_GRAY).add_modifier(Modifier::ITALIC)))]
     };
 
-    let details = Paragraph::new(details_text)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title("Details"))
+    let para = Paragraph::new(content)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(PALETTE_SECONDARY))
+                .title(Span::styled(" 📝 Details ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)))
+                .style(Style::default().bg(Color::Black))
+        )
         .wrap(Wrap { trim: true })
-        .scroll((app.details_scroll, 0));
-    f.render_widget(details, area);
+        .scroll((app.details_scroll as u16, 0));
+
+    f.render_widget(para, area);
 }
 
-fn draw_status_panel(f: &mut Frame, app: &App, area: Rect) {
-    let mut title = String::from("Status");
+fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let mut title = String::from("ℹ️ Status");
     if app.loading {
         title.push_str(&format!(" {}", app.spinner_frames[app.spinner_state]));
     }
 
-    // Combine app.message (short status) and app.status_text (long output)
-    let mut content = vec![
-        Line::from(Span::styled(&app.message, Style::default().fg(if app.loading { Color::Yellow } else { Color::Green }))),
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled(&app.message, Style::default().fg(if app.loading { PALETTE_WARNING } else { PALETTE_SUCCESS }))),
         Line::from(""),
     ];
     
     for line in app.status_text.lines() {
-        content.push(Line::from(line));
+        lines.push(Line::from(Span::styled(line, Style::default().fg(PALETTE_FG))));
     }
 
-    let status = Paragraph::new(content)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).title(title))
+    let status = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(PALETTE_SECONDARY))
+                .title(Span::styled(title, Style::default().fg(PALETTE_WARNING).add_modifier(Modifier::BOLD)))
+                .style(Style::default().bg(Color::Black))
+        )
         .wrap(Wrap { trim: true })
-        .scroll((app.status_scroll, 0));
+        .scroll((app.status_scroll as u16, 0));
     f.render_widget(status, area);
 }
 
