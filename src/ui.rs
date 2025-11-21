@@ -23,6 +23,9 @@ const PALETTE_FG: Color = Color::Rgb(248, 248, 242);         // Foreground
 const PALETTE_GRAY: Color = Color::Rgb(98, 114, 164);        // Gray
 const PALETTE_BG_LIGHTER: Color = Color::Rgb(68, 71, 90);    // Lighter Background
 
+const SLANT_RIGHT: &str = "";
+const SLANT_LEFT: &str = "";
+
 pub fn draw(f: &mut Frame, app: &mut App) {
     // Splash Screen - simple custom implementation
     if app.show_splash {
@@ -393,8 +396,11 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(PALETTE_SECONDARY))
-                .title(Span::styled(" 📦 SNAPSHOTS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)))
-                .title_alignment(Alignment::Center)
+                .title(Line::from(vec![
+                    Span::styled(" 📦 SNAPSHOTS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)),
+                    Span::styled(SLANT_RIGHT, Style::default().fg(PALETTE_SECONDARY).bg(PALETTE_BG_DARK)),
+                ]))
+                .title_alignment(Alignment::Left)
                 .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .highlight_style(Style::default().bg(PALETTE_ACCENT).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD))
@@ -466,8 +472,11 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(PALETTE_ACCENT))
-                .title(Span::styled(" 🔍 DETAILS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)))
-                .title_alignment(Alignment::Center)
+                .title(Line::from(vec![
+                    Span::styled(" 🔍 DETAILS ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                    Span::styled(SLANT_RIGHT, Style::default().fg(PALETTE_ACCENT).bg(PALETTE_BG_DARK)),
+                ]))
+                .title_alignment(Alignment::Left)
                 .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
@@ -497,8 +506,11 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(PALETTE_WARNING))
-                .title(Span::styled(title, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_WARNING).add_modifier(Modifier::BOLD)))
-                .title_alignment(Alignment::Center)
+                .title(Line::from(vec![
+                    Span::styled(title, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_WARNING).add_modifier(Modifier::BOLD)),
+                    Span::styled(SLANT_RIGHT, Style::default().fg(PALETTE_WARNING).bg(PALETTE_BG_DARK)),
+                ]))
+                .title_alignment(Alignment::Left)
                 .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
@@ -509,15 +521,35 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_actions_bar(f: &mut Frame, area: Rect) {
     let actions_text = vec![
         Span::styled(" ⚡ ACTIONS: ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+        
+        // Delete
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_ERROR).bg(PALETTE_BG_DARK)),
         Span::styled(" [D]elete 🗑️  ", Style::default().bg(PALETTE_ERROR).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ERROR)),
         Span::raw(" "),
+
+        // Apply
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_SUCCESS).bg(PALETTE_BG_DARK)),
         Span::styled(" [A]pply ↩️  ", Style::default().bg(PALETTE_SUCCESS).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SUCCESS)),
         Span::raw(" "),
+
+        // Status
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_SECONDARY).bg(PALETTE_BG_DARK)),
         Span::styled(" [S]tatus ℹ️  ", Style::default().bg(PALETTE_SECONDARY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SECONDARY)),
         Span::raw(" "),
+
+        // Refresh
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_WARNING).bg(PALETTE_BG_DARK)),
         Span::styled(" [R]efresh 🔄 ", Style::default().bg(PALETTE_WARNING).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_WARNING)),
         Span::raw(" "),
+
+        // Quit
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_GRAY).bg(PALETTE_BG_DARK)),
         Span::styled(" [Q]uit 🚪 ", Style::default().bg(PALETTE_GRAY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_GRAY)),
     ];
     
     let actions = Paragraph::new(Line::from(actions_text))
