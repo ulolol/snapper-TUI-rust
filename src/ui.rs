@@ -52,7 +52,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                             .add_modifier(Modifier::BOLD),
                     )),
                     Line::from(Span::styled(
-                        "▄█  █░▀█ █▀█ █▀▀ █▀▀ ██▄ █▀▄",
+                        "▄▄█ █░▀█ █▀█ █▀▀ █▀▀ ██▄ █▀▄",
                         Style::default()
                             .fg(PALETTE_SECONDARY)
                             .add_modifier(Modifier::BOLD),
@@ -94,10 +94,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         app.fx_start = Some(std::time::Instant::now());
     }
 
-    if app.loading && app.snapshots.is_empty() {
-        draw_loading_screen(f, app);
-    } else {
-        // Create a "floating" layout with gaps
+    // Always draw main UI if we have data or if we are just loading initially but want structure
+    // Actually, if snapshots are empty and loading, we might want just the loading screen.
+    // But for operations, we want overlay.
+    
+    if !app.snapshots.is_empty() || !app.loading {
+         // Create a "floating" layout with gaps
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -136,6 +138,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         draw_actions_bar(f, footer_area);
     }
 
+
+
     // Render TachyonFX effects
     if let Some(effect) = &mut app.fx {
         if let Some(start) = app.fx_start {
@@ -154,6 +158,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     
     if app.show_apply_popup {
         draw_apply_popup(f, app);
+    }
+
+    // Overlay Loading Screen if loading (Render last to be on top)
+    if app.loading {
+        draw_loading_screen(f, app);
     }
 }
 
@@ -302,20 +311,20 @@ fn draw_apply_popup(f: &mut Frame, _app: &mut App) {
 }
 
 fn draw_loading_screen(f: &mut Frame, app: &mut App) {
-    let area = f.area();
     let spinner = app.spinner_frames[app.spinner_state];
     let text = vec![
-        Line::from(Span::styled("Snapper TUI", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("Snapper TUI", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD))),
         Line::from(""),
-        Line::from(Span::styled(format!("Loading Snapshots... {}", spinner), Style::default().fg(Color::Yellow))),
+        Line::from(Span::styled(format!("{} {}", app.loading_message, spinner), Style::default().fg(PALETTE_WARNING))),
     ];
     
     let block = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded));
+        .alignment(Alignment::Center)
+        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).style(Style::default().bg(PALETTE_BG_DARK)));
     
     // Center the loading box
-    let area = centered_rect(60, 20, area);
+    let area = centered_rect(60, 20, f.area());
+    f.render_widget(Clear, area); // Clear background
     f.render_widget(block, area);
 }
 

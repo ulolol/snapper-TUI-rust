@@ -12,11 +12,19 @@ pub enum SortKey {
     UsedSpace,
 }
 
+pub enum InputMode {
+    Normal,
+    Editing,
+    Filtering,
+}
+
 pub struct App {
     pub snapshots: Vec<Snapshot>,
     pub table_state: TableState,
     pub message: String,
     pub loading: bool,
+    pub loading_message: String,
+    pub input_mode: InputMode,
     pub status_text: String,
     pub details_scroll: u16,
     pub status_scroll: u16,
@@ -44,7 +52,9 @@ impl App {
             snapshots: Vec::new(),
             table_state: TableState::default(),
             message: String::from("⚡ Initializing..."),
-            loading: true, // Start loading immediately
+            loading: true,
+            loading_message: String::from("Loading..."),
+            input_mode: InputMode::Normal,
             status_text: String::new(),
             details_scroll: 0,
             status_scroll: 0,
@@ -142,9 +152,8 @@ impl App {
         self.table_state.selected().and_then(|i| self.snapshots.get(i))
     }
 
-    pub fn delete_selected_snapshot(&mut self) {
-        // Determine which snapshots to delete
-        let to_delete: Vec<u32> = if !self.selected_indices.is_empty() {
+    pub fn get_targets_for_delete(&self) -> Vec<u32> {
+        if !self.selected_indices.is_empty() {
             // Delete all selected snapshots
             self.selected_indices.iter()
                 .filter_map(|&idx| self.snapshots.get(idx))
@@ -159,19 +168,10 @@ impl App {
             }
         } else {
             vec![]
-        };
-
-        // Perform deletions
-        let mut success_count = 0;
-        let mut error_count = 0;
-        
-        for number in to_delete {
-            match data::delete_snapshot(number) {
-                Ok(_) => success_count += 1,
-                Err(_) => error_count += 1,
-            }
         }
+    }
 
+    pub fn handle_delete_result(&mut self, success_count: usize, error_count: usize) {
         // Update message
         if success_count > 0 {
             self.message = if success_count == 1 {
@@ -188,22 +188,13 @@ impl App {
 
         // Clear selections and refresh
         self.clear_selections();
-        self.refresh_snapshots();
+        // Note: Refreshing snapshots should be done by the caller (main.rs) via thread
+        // or we can trigger it here if we move the thread logic? 
+        // For now, main.rs handles the refresh trigger.
     }
 
-    pub fn apply_selected_snapshot(&mut self) {
-        if let Some(snap) = self.get_selected_snapshot() {
-            let number = snap.number;
-            self.message = format!("⏳ Applying snapshot {} (Rollback)...", number);
-            match data::rollback_snapshot(number) {
-                Ok(_) => {
-                    self.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
-                }
-                Err(e) => {
-                    self.message = format!("❌ Error applying snapshot: {}", e);
-                }
-            }
-        }
+    pub fn get_target_for_apply(&self) -> Option<u32> {
+        self.get_selected_snapshot().map(|s| s.number)
     }
     
     pub fn get_status_selected_snapshot(&mut self) {

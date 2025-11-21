@@ -90,7 +90,35 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     if app.show_delete_popup {
                         match key.code {
                             KeyCode::Enter => {
-                                app.delete_selected_snapshot();
+                                let targets = app.get_targets_for_delete();
+                                if !targets.is_empty() {
+                                    app.loading = true;
+                                    app.loading_message = format!("Deleting {} snapshot(s)...", targets.len());
+                                    terminal.draw(|f| app_ui::draw(f, app))?;
+
+                                    let mut success_count = 0;
+                                    let mut error_count = 0;
+                                    
+                                    for number in targets {
+                                        match data::delete_snapshot(number) {
+                                            Ok(_) => success_count += 1,
+                                            Err(_) => error_count += 1,
+                                        }
+                                    }
+                                    
+                                    app.handle_delete_result(success_count, error_count);
+                                    
+                                    // Trigger refresh
+                                    app.loading = true;
+                                    app.loading_message = String::from("Refreshing...");
+                                    app.snapshots.clear();
+                                    let (tx, rx) = mpsc::channel();
+                                    app.rx = Some(rx);
+                                    thread::spawn(move || {
+                                        let res = crate::data::list_snapshots().map_err(|e| e.to_string());
+                                        let _ = tx.send(res);
+                                    });
+                                }
                                 app.show_delete_popup = false;
                             }
                             KeyCode::Esc | KeyCode::Char('q') => {
@@ -103,7 +131,21 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     if app.show_apply_popup {
                         match key.code {
                             KeyCode::Enter => {
-                                app.apply_selected_snapshot();
+                                if let Some(number) = app.get_target_for_apply() {
+                                    app.loading = true;
+                                    app.loading_message = format!("Applying snapshot {}...", number);
+                                    terminal.draw(|f| app_ui::draw(f, app))?;
+
+                                    match data::rollback_snapshot(number) {
+                                        Ok(_) => {
+                                            app.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
+                                        }
+                                        Err(e) => {
+                                            app.message = format!("❌ Error applying snapshot: {}", e);
+                                        }
+                                    }
+                                    app.loading = false;
+                                }
                                 app.show_apply_popup = false;
                             }
                             KeyCode::Esc | KeyCode::Char('q') => {
@@ -117,7 +159,8 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         match key.code {
                             KeyCode::Enter => {
                                 if !app.create_input.is_empty() {
-                                    app.message = String::from("⚡ Creating snapshot...");
+                                    app.loading = true;
+                                    app.loading_message = String::from("Creating snapshot...");
                                     terminal.draw(|f| app_ui::draw(f, app))?; // Use app_ui
                                     
                                     match data::create_snapshot(&app.create_input) {
@@ -134,6 +177,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                         }
                                         Err(e) => app.message = format!("❌ Error: {}", e),
                                     }
+                                    app.loading = false;
                                     app.create_input.clear();
                                     app.show_create_popup = false;
                                 }
@@ -185,7 +229,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             app.loading = true;
-                            app.message = String::from("🔄 Refreshing...");
+                            app.loading_message = String::from("Refreshing...");
                             app.snapshots.clear();
                             
                             let (tx, rx) = mpsc::channel();
@@ -283,7 +327,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 else if col >= 30 && col < 40 { app.get_status_selected_snapshot(); }
                                 else if col >= 40 && col < 50 { 
                                     app.loading = true;
-                                    app.message = String::from("🔄 Refreshing...");
+                                    app.loading_message = String::from("Refreshing...");
                                     app.snapshots.clear();
                                     let (tx, rx) = mpsc::channel();
                                     app.rx = Some(rx);
