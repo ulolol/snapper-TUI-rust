@@ -110,7 +110,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Constraint::Length(1), // Bottom Gap
             ])
             .split(f.area());
-
+        let header_area = chunks[1];
+        draw_header(f, app, header_area);
+        
         // Add horizontal padding
         let main_layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -129,7 +131,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let main_area = intersection(chunks[3], main_layout[1]);
         let footer_area = intersection(chunks[5], main_layout[1]);
 
-        draw_header(f, header_area);
+        draw_header(f, app, header_area);
         draw_main(f, app, main_area);
         draw_actions_bar(f, footer_area);
     }
@@ -143,31 +145,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Custom Popups - render on top
     if app.show_delete_popup {
-        let count = if app.get_selected_count() > 0 {
-            app.get_selected_count()
-        } else {
-            1
-        };
-        
-        let message = if count > 1 {
-            format!("Delete {} selected snapshots?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel", count)
-        } else {
-            "Delete selected snapshot?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel".to_string()
-        };
-        
-        draw_popup(
-            f,
-            "🗑 DELETE SNAPSHOT 🗑",
-            &message,
-            PALETTE_ERROR,
-        );
-    } else if app.show_apply_popup {
-        draw_popup(
-            f,
-            "⚡ APPLY SNAPSHOT ⚡",
-            "Are you sure you want to rollback to this snapshot?\n\nSystem will need a reboot to take effect.\n\n[Enter] Confirm  [Esc] Cancel",
-            PALETTE_WARNING,
-        );
+        draw_delete_popup(f, app);
+    }
+    
+    if app.show_create_popup {
+        draw_create_popup(f, app);
+    }
+    
+    if app.show_apply_popup {
+        draw_apply_popup(f, app);
     }
 }
 
@@ -235,6 +221,86 @@ fn draw_popup(f: &mut Frame, title: &str, message: &str, border_color: Color) {
     f.render_widget(para, text_area);
 }
 
+fn draw_delete_popup(f: &mut Frame, app: &mut App) {
+    let count = if app.get_selected_count() > 0 {
+        app.get_selected_count()
+    } else {
+        1
+    };
+    
+    let message = if count > 1 {
+        format!("Delete {} selected snapshots?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel", count)
+    } else {
+        "Delete selected snapshot?\n\nThis action cannot be undone.\n\n[Enter] Confirm  [Esc] Cancel".to_string()
+    };
+    
+    draw_popup(
+        f,
+        "🗑 DELETE SNAPSHOT 🗑",
+        &message,
+        PALETTE_ERROR,
+    );
+}
+
+fn draw_create_popup(f: &mut Frame, app: &mut App) {
+    let area = centered_rect(60, 25, f.area());
+    
+    // Clear area
+    f.render_widget(Clear, area);
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(PALETTE_ACCENT))
+        .title(Line::from(vec![
+            Span::styled(" ➕ CREATE SNAPSHOT ", Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(SLANT_RIGHT, Style::default().fg(PALETTE_ACCENT).bg(PALETTE_BG_DARK)),
+        ]))
+        .title_alignment(Alignment::Left)
+        .style(Style::default().bg(PALETTE_BG_DARK));
+        
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+    
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Prompt
+            Constraint::Length(3), // Input
+            Constraint::Min(1),    // Gap
+            Constraint::Length(3), // Buttons
+        ])
+        .margin(1)
+        .split(inner_area);
+        
+    let prompt = Paragraph::new("Enter description for the new snapshot:")
+        .style(Style::default().fg(PALETTE_FG))
+        .alignment(Alignment::Center);
+    f.render_widget(prompt, chunks[0]);
+    
+    let input = Paragraph::new(format!("{}█", app.create_input))
+        .style(Style::default().fg(PALETTE_SECONDARY).bg(PALETTE_BG_LIGHTER))
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(PALETTE_GRAY)));
+    f.render_widget(input, chunks[1]);
+    
+    let buttons = Paragraph::new(Line::from(vec![
+        Span::styled(" [Enter] Create ", Style::default().fg(PALETTE_SUCCESS).add_modifier(Modifier::BOLD)),
+        Span::raw("   "),
+        Span::styled(" [Esc] Cancel ", Style::default().fg(PALETTE_ERROR).add_modifier(Modifier::BOLD)),
+    ]))
+    .alignment(Alignment::Center);
+    f.render_widget(buttons, chunks[3]);
+}
+
+fn draw_apply_popup(f: &mut Frame, _app: &mut App) {
+    draw_popup(
+        f,
+        "⚡ APPLY SNAPSHOT ⚡",
+        "Are you sure you want to rollback to this snapshot?\n\nSystem will need a reboot to take effect.\n\n[Enter] Confirm  [Esc] Cancel",
+        PALETTE_WARNING,
+    );
+}
+
 fn draw_loading_screen(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let spinner = app.spinner_frames[app.spinner_state];
@@ -281,20 +347,40 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn draw_header(f: &mut Frame, area: Rect) {
-    // Custom header with large styled text
-    let header_text = vec![
-        Line::from(""), // Empty line for spacing
-        Line::from(vec![
-            Span::styled("  🔮 SNAPPER ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-            Span::styled("TUI ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
-            Span::styled("⚡ ", Style::default().fg(PALETTE_WARNING)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Cyberpunk Edition ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::ITALIC)),
-        ]),
-        Line::from(""), // Empty line for spacing
-    ];
+fn draw_header(f: &mut Frame, app: &mut App, area: Rect) {
+    let header_text = if app.filtering {
+        vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Filter: ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)),
+                Span::styled(&app.filter_input, Style::default().fg(PALETTE_FG).bg(PALETTE_BG_LIGHTER)),
+                Span::styled(" █", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::SLOW_BLINK)),
+            ]),
+            Line::from(""),
+        ]
+    } else if !app.filter_input.is_empty() {
+        vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Filter: ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::BOLD)),
+                Span::styled(&app.filter_input, Style::default().fg(PALETTE_FG)),
+            ]),
+            Line::from(""),
+        ]
+    } else {
+        vec![
+            Line::from(""), // Empty line for spacing
+            Line::from(vec![
+                Span::styled("  🔮 SNAPPER ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
+                Span::styled("TUI ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled("⚡ ", Style::default().fg(PALETTE_WARNING)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Cyberpunk Edition ", Style::default().fg(PALETTE_SECONDARY).add_modifier(Modifier::ITALIC)),
+            ]),
+            Line::from(""), // Empty line for spacing
+        ]
+    };
 
     let header = Paragraph::new(header_text)
         .alignment(Alignment::Center)
@@ -305,7 +391,6 @@ fn draw_header(f: &mut Frame, area: Rect) {
                 .border_style(Style::default().fg(PALETTE_PRIMARY))
                 .style(Style::default().bg(PALETTE_BG_DARK))
         );
-
     f.render_widget(header, area);
 }
 
@@ -361,8 +446,10 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         .style(Style::default().bg(PALETTE_PRIMARY))
         .height(1);
 
+    let snapshots = app.get_filtered_snapshots();
+    
     // Zebra striping with modern colors
-    let rows = app.snapshots.iter().enumerate().map(|(idx, item)| {
+    let rows: Vec<Row> = snapshots.iter().enumerate().map(|(idx, item)| {
         let is_selected = app.selected_indices.contains(&idx);
         let selection_marker = if is_selected { "✅ " } else { "" };
         
@@ -377,7 +464,7 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         // Zebra striping
         let bg = if idx % 2 == 0 { PALETTE_BG_DARK } else { PALETTE_BG_LIGHTER };
         Row::new(cells).height(1).style(Style::default().bg(bg).fg(PALETTE_FG))
-    });
+    }).collect();
 
     let t = Table::new(
         rows,
@@ -522,6 +609,12 @@ fn draw_actions_bar(f: &mut Frame, area: Rect) {
     let actions_text = vec![
         Span::styled(" ⚡ ACTIONS: ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
         
+        // Create
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_ACCENT).bg(PALETTE_BG_DARK)),
+        Span::styled(" [C]reate ➕ ", Style::default().bg(PALETTE_ACCENT).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT)),
+        Span::raw(" "),
+
         // Delete
         Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_ERROR).bg(PALETTE_BG_DARK)),
         Span::styled(" [D]elete 🗑️  ", Style::default().bg(PALETTE_ERROR).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
@@ -532,6 +625,12 @@ fn draw_actions_bar(f: &mut Frame, area: Rect) {
         Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_SUCCESS).bg(PALETTE_BG_DARK)),
         Span::styled(" [A]pply ↩️  ", Style::default().bg(PALETTE_SUCCESS).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
         Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SUCCESS)),
+        Span::raw(" "),
+
+        // Filter
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_PRIMARY).bg(PALETTE_BG_DARK)),
+        Span::styled(" [/] Filter 🔍 ", Style::default().bg(PALETTE_PRIMARY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
+        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY)),
         Span::raw(" "),
 
         // Status
