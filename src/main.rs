@@ -113,9 +113,76 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         continue;
                     }
+                    if app.show_create_popup {
+                        match key.code {
+                            KeyCode::Enter => {
+                                if !app.create_input.is_empty() {
+                                    app.message = String::from("⚡ Creating snapshot...");
+                                    terminal.draw(|f| app_ui::draw(f, app))?; // Use app_ui
+                                    
+                                    match data::create_snapshot(&app.create_input) {
+                                        Ok(_) => {
+                                            app.message = format!("✅ Snapshot created: {}", app.create_input);
+                                            match data::list_snapshots() {
+                                                Ok(snapshots) => {
+                                                    app.snapshots = snapshots;
+                                                    app.sort_snapshots();
+                                                    app.table_state.select(Some(0));
+                                                }
+                                                Err(e) => app.message = format!("❌ Error refreshing: {}", e),
+                                            }
+                                        }
+                                        Err(e) => app.message = format!("❌ Error: {}", e),
+                                    }
+                                    app.create_input.clear();
+                                    app.show_create_popup = false;
+                                }
+                            }
+                            KeyCode::Esc => {
+                                app.show_create_popup = false;
+                                app.create_input.clear();
+                            }
+                            KeyCode::Char(c) => {
+                                app.create_input.push(c);
+                            }
+                            KeyCode::Backspace => {
+                                app.create_input.pop();
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    if app.filtering {
+                        match key.code {
+                            KeyCode::Enter => {
+                                app.filtering = false;
+                            }
+                            KeyCode::Esc => {
+                                app.filtering = false;
+                                app.filter_input.clear();
+                                app.table_state.select(Some(0));
+                            }
+                            KeyCode::Char(c) => {
+                                app.filter_input.push(c);
+                                app.table_state.select(Some(0));
+                            }
+                            KeyCode::Backspace => {
+                                app.filter_input.pop();
+                                app.table_state.select(Some(0));
+                            }
+                            _ => {}
+                        }
+                        continue;
+                    }
 
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                            app.show_create_popup = true;
+                        }
+                        KeyCode::Char('/') => {
+                            app.filtering = true;
+                        }
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             app.loading = true;
                             app.message = String::from("🔄 Refreshing...");
