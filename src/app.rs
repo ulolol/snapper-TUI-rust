@@ -1,6 +1,7 @@
 use crate::data::{self, Snapshot};
 use ratatui::widgets::TableState;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::collections::HashSet;
 use tachyonfx::Effect;
 
 pub enum SortKey {
@@ -14,27 +15,23 @@ pub enum SortKey {
 pub struct App {
     pub snapshots: Vec<Snapshot>,
     pub table_state: TableState,
-    pub sort_key: SortKey,
-    pub sort_reverse: bool,
-    pub loading: bool,
     pub message: String,
-    // New fields for scrolling and spinner
+    pub loading: bool,
+    pub status_text: String,
     pub details_scroll: u16,
     pub status_scroll: u16,
-    pub status_text: String,
     pub spinner_state: usize,
     pub spinner_frames: Vec<&'static str>,
-    // Threading
-    pub rx: Option<Receiver<Result<Vec<Snapshot>, String>>>,
-    // TachyonFX
-    pub fx_start: Option<std::time::Instant>,
-    pub fx: Option<Effect>,
-    // Popups
     pub show_delete_popup: bool,
     pub show_apply_popup: bool,
-    // Splash Screen
     pub show_splash: bool,
     pub splash_start: Option<std::time::Instant>,
+    pub fx: Option<Effect>,
+    pub fx_start: Option<std::time::Instant>,
+    pub current_sort_key: SortKey,
+    pub sort_ascending: bool,
+    pub rx: Option<Receiver<Result<Vec<Snapshot>, String>>>,
+    pub selected_indices: HashSet<usize>,
 }
 
 impl App {
@@ -42,22 +39,23 @@ impl App {
         App {
             snapshots: Vec::new(),
             table_state: TableState::default(),
-            sort_key: SortKey::Number,
-            sort_reverse: false,
-            loading: true, // Start loading immediately
             message: String::from("Initializing..."),
+            loading: true, // Start loading immediately
+            status_text: String::new(),
             details_scroll: 0,
             status_scroll: 0,
-            status_text: String::new(),
             spinner_state: 0,
             spinner_frames: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-            rx: None,
-            fx_start: None,
-            fx: None,
             show_delete_popup: false,
             show_apply_popup: false,
             show_splash: true,
             splash_start: Some(std::time::Instant::now()),
+            fx: None,
+            fx_start: None,
+            current_sort_key: SortKey::Number,
+            sort_ascending: true,
+            rx: None,
+            selected_indices: HashSet::new(),
         }
     }
 
@@ -80,23 +78,6 @@ impl App {
                 self.message = format!("Error: {}", e);
             }
         }
-    }
-
-    pub fn sort_snapshots(&mut self) {
-        self.snapshots.sort_by(|a, b| {
-            let ordering = match self.sort_key {
-                SortKey::Number => a.number.cmp(&b.number),
-                SortKey::Type => a.snapshot_type.cmp(&b.snapshot_type),
-                SortKey::Date => a.date.cmp(&b.date),
-                SortKey::User => a.user.cmp(&b.user),
-                SortKey::UsedSpace => a.used_space.unwrap_or(0).cmp(&b.used_space.unwrap_or(0)),
-            };
-            if self.sort_reverse {
-                ordering.reverse()
-            } else {
-                ordering
-            }
-        });
     }
 
     pub fn next(&mut self) {
@@ -132,19 +113,52 @@ impl App {
     }
 
     pub fn delete_selected_snapshot(&mut self) {
-        if let Some(snap) = self.get_selected_snapshot() {
-            let number = snap.number;
-            self.message = format!("Deleting snapshot {}...", number);
+        // Determine which snapshots to delete
+        let to_delete: Vec<u32> = if !self.selected_indices.is_empty() {
+            // Delete all selected snapshots
+            self.selected_indices.iter()
+                .filter_map(|&idx| self.snapshots.get(idx))
+                .map(|snapshot| snapshot.number)
+                .collect()
+        } else if let Some(idx) = self.table_state.selected() {
+            // Delete single currently highlighted snapshot
+            if let Some(snapshot) = self.snapshots.get(idx) {
+                vec![snapshot.number]
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        // Perform deletions
+        let mut success_count = 0;
+        let mut error_count = 0;
+        
+        for number in to_delete {
             match data::delete_snapshot(number) {
-                Ok(_) => {
-                    self.message = format!("Snapshot {} deleted.", number);
-                    self.refresh_snapshots();
-                }
-                Err(e) => {
-                    self.message = format!("Error deleting snapshot: {}", e);
-                }
+                Ok(_) => success_count += 1,
+                Err(_) => error_count += 1,
             }
         }
+
+        // Update message
+        if success_count > 0 {
+            self.message = if success_count == 1 {
+                format!("Deleted 1 snapshot")
+            } else {
+                format!("Deleted {} snapshots", success_count)
+            };
+            if error_count > 0 {
+                self.message.push_str(&format!(" ({} failed)", error_count));
+            }
+        } else if error_count > 0 {
+            self.message = format!("Failed to delete {} snapshot(s)", error_count);
+        }
+
+        // Clear selections and refresh
+        self.clear_selections();
+        self.refresh_snapshots();
     }
 
     pub fn apply_selected_snapshot(&mut self) {
@@ -203,5 +217,91 @@ impl App {
         } else {
             self.status_scroll += 1;
         }
+    }
+
+    pub fn set_sort_key(&mut self, key: SortKey) {
+        // Toggle ascending/descending if same key
+        if matches!((&self.current_sort_key, &key),
+            (SortKey::Number, SortKey::Number) |
+            (SortKey::Type, SortKey::Type) |
+            (SortKey::Date, SortKey::Date) |
+            (SortKey::User, SortKey::User) |
+            (SortKey::UsedSpace, SortKey::UsedSpace))
+        {
+            self.sort_ascending = !self.sort_ascending;
+        } else {
+            self.current_sort_key = key;
+            self.sort_ascending = true;
+        }
+        self.sort_snapshots();
+    }
+
+    pub fn sort_snapshots(&mut self) {
+        match self.current_sort_key {
+            SortKey::Number => {
+                self.snapshots.sort_by_key(|s| s.number);
+            }
+            SortKey::Type => {
+                self.snapshots.sort_by(|a, b| a.snapshot_type.cmp(&b.snapshot_type));
+            }
+            SortKey::Date => {
+                self.snapshots.sort_by(|a, b| a.date.cmp(&b.date));
+            }
+            SortKey::User => {
+                self.snapshots.sort_by(|a, b| a.user.cmp(&b.user));
+            }
+            SortKey::UsedSpace => {
+                self.snapshots.sort_by_key(|s| s.used_space.unwrap_or(0));
+            }
+        }
+        if !self.sort_ascending {
+            self.snapshots.reverse();
+        }
+    }
+
+    pub fn get_sort_indicator(&self, key: SortKey) -> &'static str {
+        let is_active = matches!((&self.current_sort_key, &key),
+            (SortKey::Number, SortKey::Number) |
+            (SortKey::Type, SortKey::Type) |
+            (SortKey::Date, SortKey::Date) |
+            (SortKey::User, SortKey::User) |
+            (SortKey::UsedSpace, SortKey::UsedSpace));
+        
+        if is_active {
+            if self.sort_ascending { " ↑" } else { " ↓" }
+        } else {
+            ""
+        }
+    }
+    
+    pub fn toggle_selection(&mut self) {
+        if let Some(idx) = self.table_state.selected() {
+            if self.selected_indices.contains(&idx) {
+                self.selected_indices.remove(&idx);
+            } else {
+                self.selected_indices.insert(idx);
+            }
+        }
+    }
+    
+    pub fn clear_selections(&mut self) {
+        self.selected_indices.clear();
+    }
+    
+    pub fn get_selected_count(&self) -> usize {
+        self.selected_indices.len()
+    }
+}
+
+// Helper function for human-readable sizes
+pub fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{}B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1}K", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
