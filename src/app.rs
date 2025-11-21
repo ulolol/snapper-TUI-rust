@@ -23,6 +23,10 @@ pub struct App {
     pub spinner_state: usize,
     pub spinner_frames: Vec<&'static str>,
     pub show_delete_popup: bool,
+    pub show_create_popup: bool,
+    pub create_input: String,
+    pub filtering: bool,
+    pub filter_input: String,
     pub show_apply_popup: bool,
     pub show_splash: bool,
     pub splash_start: Option<std::time::Instant>,
@@ -47,6 +51,10 @@ impl App {
             spinner_state: 0,
             spinner_frames: vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
             show_delete_popup: false,
+            show_create_popup: false,
+            create_input: String::new(),
+            filtering: false,
+            filter_input: String::new(),
             show_apply_popup: false,
             show_splash: true,
             splash_start: Some(std::time::Instant::now()),
@@ -80,32 +88,54 @@ impl App {
         }
     }
 
+    pub fn get_filtered_snapshots(&self) -> Vec<&Snapshot> {
+        if self.filter_input.is_empty() {
+            self.snapshots.iter().collect()
+        } else {
+            self.snapshots
+                .iter()
+                .filter(|s| {
+                    s.description.to_lowercase().contains(&self.filter_input.to_lowercase())
+                        || s.snapshot_type.to_lowercase().contains(&self.filter_input.to_lowercase())
+                        || s.user.to_lowercase().contains(&self.filter_input.to_lowercase())
+                        || s.number.to_string().contains(&self.filter_input)
+                })
+                .collect()
+        }
+    }
+
     pub fn next(&mut self) {
-        let i = match self.table_state.selected() {
-            Some(i) => {
-                if i >= self.snapshots.len() - 1 {
-                    0
-                } else {
-                    i + 1
+        let filtered_len = self.get_filtered_snapshots().len();
+        if filtered_len > 0 {
+            let i = match self.table_state.selected() {
+                Some(i) => {
+                    if i >= filtered_len - 1 {
+                        0
+                    } else {
+                        i + 1
+                    }
                 }
-            }
-            None => 0,
-        };
-        self.table_state.select(Some(i));
+                None => 0,
+            };
+            self.table_state.select(Some(i));
+        }
     }
 
     pub fn previous(&mut self) {
-        let i = match self.table_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.snapshots.len() - 1
-                } else {
-                    i - 1
+        let filtered_len = self.get_filtered_snapshots().len();
+        if filtered_len > 0 {
+            let i = match self.table_state.selected() {
+                Some(i) => {
+                    if i == 0 {
+                        filtered_len - 1
+                    } else {
+                        i - 1
+                    }
                 }
-            }
-            None => 0,
-        };
-        self.table_state.select(Some(i));
+                None => 0,
+            };
+            self.table_state.select(Some(i));
+        }
     }
 
     pub fn get_selected_snapshot(&self) -> Option<&Snapshot> {
