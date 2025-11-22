@@ -13,7 +13,7 @@ use ratatui::{
     },
     Terminal,
 };
-use crate::{app::App, ui as app_ui}; // Renamed to avoid conflict
+use crate::{app::{App, AsyncResult}, ui as app_ui}; // Renamed to avoid conflict
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup terminal
@@ -30,7 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, rx) = mpsc::channel();
     app.rx = Some(rx);
     thread::spawn(move || {
-        let res = crate::data::list_snapshots().map_err(|e| e.to_string());
+        let res = crate::data::list_snapshots()
+            .map(AsyncResult::Snapshots)
+            .map_err(|e| e.to_string());
         let _ = tx.send(res);
     });
 
@@ -62,15 +64,51 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 app.loading = false;
                 app.rx = None; // Stop checking
                 match result {
-                    Ok(snapshots) => {
+                    Ok(AsyncResult::Snapshots(snapshots)) => {
                         app.snapshots = snapshots;
                         app.message = format!("✅ Loaded {} snapshots.", app.snapshots.len());
                         if !app.snapshots.is_empty() {
                             app.table_state.select(Some(0));
                         }
                     }
+                    Ok(AsyncResult::Create(name)) => {
+                        app.message = format!("✅ Snapshot created: {}", name);
+                        // Trigger refresh
+                        app.loading = true;
+                        app.loading_message = String::from("Refreshing...");
+                        let (tx, rx) = mpsc::channel();
+                        app.rx = Some(rx);
+                        thread::spawn(move || {
+                            let res = crate::data::list_snapshots()
+                                .map(AsyncResult::Snapshots)
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(res);
+                        });
+                    }
+                    Ok(AsyncResult::Delete { success, fail }) => {
+                        app.handle_delete_result(success, fail);
+                        // Trigger refresh
+                        app.loading = true;
+                        app.loading_message = String::from("Refreshing...");
+                        let (tx, rx) = mpsc::channel();
+                        app.rx = Some(rx);
+                        thread::spawn(move || {
+                            let res = crate::data::list_snapshots()
+                                .map(AsyncResult::Snapshots)
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(res);
+                        });
+                    }
+                    Ok(AsyncResult::Apply(number)) => {
+                        app.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
+                    }
+                    Ok(AsyncResult::Status(status)) => {
+                        app.status_text = status;
+                        app.message = String::from("✅ Status loaded.");
+                        app.status_scroll = 0;
+                    }
                     Err(e) => {
-                        app.message = format!("❌ Error loading snapshots: {}", e);
+                        app.message = format!("❌ Error: {}", e);
                     }
                 }
             }
@@ -94,28 +132,22 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 if !targets.is_empty() {
                                     app.loading = true;
                                     app.loading_message = format!("Deleting {} snapshot(s)...", targets.len());
-                                    terminal.draw(|f| app_ui::draw(f, app))?;
-
-                                    let mut success_count = 0;
-                                    let mut error_count = 0;
                                     
-                                    for number in targets {
-                                        match data::delete_snapshot(number) {
-                                            Ok(_) => success_count += 1,
-                                            Err(_) => error_count += 1,
-                                        }
-                                    }
-                                    
-                                    app.handle_delete_result(success_count, error_count);
-                                    
-                                    // Trigger refresh
-                                    app.loading = true;
-                                    app.loading_message = String::from("Refreshing...");
-                                    app.snapshots.clear();
                                     let (tx, rx) = mpsc::channel();
                                     app.rx = Some(rx);
+                                    
                                     thread::spawn(move || {
-                                        let res = crate::data::list_snapshots().map_err(|e| e.to_string());
+                                        let mut success_count = 0;
+                                        let mut error_count = 0;
+                                        
+                                        for number in targets {
+                                            match crate::data::delete_snapshot(number) {
+                                                Ok(_) => success_count += 1,
+                                                Err(_) => error_count += 1,
+                                            }
+                                        }
+                                        
+                                        let res = Ok(AsyncResult::Delete { success: success_count, fail: error_count });
                                         let _ = tx.send(res);
                                     });
                                 }
@@ -134,17 +166,16 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 if let Some(number) = app.get_target_for_apply() {
                                     app.loading = true;
                                     app.loading_message = format!("Applying snapshot {}...", number);
-                                    terminal.draw(|f| app_ui::draw(f, app))?;
-
-                                    match data::rollback_snapshot(number) {
-                                        Ok(_) => {
-                                            app.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
-                                        }
-                                        Err(e) => {
-                                            app.message = format!("❌ Error applying snapshot: {}", e);
-                                        }
-                                    }
-                                    app.loading = false;
+                                    
+                                    let (tx, rx) = mpsc::channel();
+                                    app.rx = Some(rx);
+                                    
+                                    thread::spawn(move || {
+                                        let res = crate::data::rollback_snapshot(number)
+                                            .map(|_| AsyncResult::Apply(number))
+                                            .map_err(|e| e.to_string());
+                                        let _ = tx.send(res);
+                                    });
                                 }
                                 app.show_apply_popup = false;
                             }
@@ -161,23 +192,17 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 if !app.create_input.is_empty() {
                                     app.loading = true;
                                     app.loading_message = String::from("Creating snapshot...");
-                                    terminal.draw(|f| app_ui::draw(f, app))?; // Use app_ui
                                     
-                                    match data::create_snapshot(&app.create_input) {
-                                        Ok(_) => {
-                                            app.message = format!("✅ Snapshot created: {}", app.create_input);
-                                            match data::list_snapshots() {
-                                                Ok(snapshots) => {
-                                                    app.snapshots = snapshots;
-                                                    app.sort_snapshots();
-                                                    app.table_state.select(Some(0));
-                                                }
-                                                Err(e) => app.message = format!("❌ Error refreshing: {}", e),
-                                            }
-                                        }
-                                        Err(e) => app.message = format!("❌ Error: {}", e),
-                                    }
-                                    app.loading = false;
+                                    let input = app.create_input.clone();
+                                    let (tx, rx) = mpsc::channel();
+                                    app.rx = Some(rx);
+                                    
+                                    thread::spawn(move || {
+                                        let res = crate::data::create_snapshot(&input)
+                                            .map(|_| AsyncResult::Create(input))
+                                            .map_err(|e| e.to_string());
+                                        let _ = tx.send(res);
+                                    });
                                     app.create_input.clear();
                                     app.show_create_popup = false;
                                 }
@@ -235,7 +260,9 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             let (tx, rx) = mpsc::channel();
                             app.rx = Some(rx);
                             thread::spawn(move || {
-                                let res = crate::data::list_snapshots().map_err(|e| e.to_string());
+                                let res = crate::data::list_snapshots()
+                                    .map(AsyncResult::Snapshots)
+                                    .map_err(|e| e.to_string());
                                 let _ = tx.send(res);
                             });
                         }
@@ -259,7 +286,18 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             if app.get_selected_count() > 0 {
                                 app.message = "❌ Error: Cannot get status with multi-selection active. Clear selections first.".to_string();
                             } else {
-                                app.get_status_selected_snapshot();
+                                if let Some(snap) = app.get_selected_snapshot().cloned() {
+                                    app.loading = true;
+                                    app.loading_message = format!("Fetching status for {}...", snap.number);
+                                    let (tx, rx) = mpsc::channel();
+                                    app.rx = Some(rx);
+                                    thread::spawn(move || {
+                                        let res = crate::data::get_snapshot_status(&snap)
+                                            .map(AsyncResult::Status)
+                                            .map_err(|e| e.to_string());
+                                        let _ = tx.send(res);
+                                    });
+                                }
                             }
                         }
                         KeyCode::Char(' ') => app.toggle_selection(),
@@ -324,7 +362,20 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                 let col = mouse.column;
                                 if col >= 10 && col < 20 { app.show_delete_popup = true; }
                                 else if col >= 20 && col < 30 { app.show_apply_popup = true; }
-                                else if col >= 30 && col < 40 { app.get_status_selected_snapshot(); }
+                                else if col >= 30 && col < 40 { 
+                                    if let Some(snap) = app.get_selected_snapshot().cloned() {
+                                        app.loading = true;
+                                        app.loading_message = format!("Fetching status for {}...", snap.number);
+                                        let (tx, rx) = mpsc::channel();
+                                        app.rx = Some(rx);
+                                        thread::spawn(move || {
+                                            let res = crate::data::get_snapshot_status(&snap)
+                                                .map(AsyncResult::Status)
+                                                .map_err(|e| e.to_string());
+                                            let _ = tx.send(res);
+                                        });
+                                    }
+                                }
                                 else if col >= 40 && col < 50 { 
                                     app.loading = true;
                                     app.loading_message = String::from("Refreshing...");
@@ -332,7 +383,9 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                     let (tx, rx) = mpsc::channel();
                                     app.rx = Some(rx);
                                     thread::spawn(move || {
-                                        let res = crate::data::list_snapshots().map_err(|e| e.to_string());
+                                        let res = crate::data::list_snapshots()
+                                            .map(AsyncResult::Snapshots)
+                                            .map_err(|e| e.to_string());
                                         let _ = tx.send(res);
                                     });
                                 }

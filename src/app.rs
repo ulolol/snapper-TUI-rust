@@ -18,6 +18,14 @@ pub enum InputMode {
     Filtering,
 }
 
+pub enum AsyncResult {
+    Snapshots(Vec<Snapshot>),
+    Delete { success: usize, fail: usize },
+    Create(String),
+    Apply(u32),
+    Status(String),
+}
+
 pub struct App {
     pub snapshots: Vec<Snapshot>,
     pub table_state: TableState,
@@ -42,7 +50,7 @@ pub struct App {
     pub fx_start: Option<std::time::Instant>,
     pub current_sort_key: SortKey,
     pub sort_ascending: bool,
-    pub rx: Option<Receiver<Result<Vec<Snapshot>, String>>>,
+    pub rx: Option<Receiver<Result<AsyncResult, String>>>,
     pub selected_indices: HashSet<usize>,
 }
 
