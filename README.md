@@ -44,6 +44,11 @@ A modern, feature-rich Terminal User Interface (TUI) for **Snapper**, written in
     ```
     *(Note: `sudo` is usually required for snapper commands)*
 
+I. Use pre-built binary:
+   ```bash
+   sudo ./snapper-TUI-rust
+   ```
+
 ## ⌨️ Keybindings
 
 | Key | Action |
