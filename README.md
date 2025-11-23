@@ -1,48 +1,53 @@
-# snapper-TUI-rust
+# snapper‑TUI‑rust 🚀
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Rust](https://img.shields.io/badge/built_with-Rust-d65d0e.svg)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) 
+[![Rust](https://img.shields.io/badge/built_with-Rust-d65d0e.svg)](https://www.rust-lang.org/)
 
-A modern, feature-rich Terminal User Interface (TUI) for **Snapper**, written in Rust. Manage your Btrfs/LVM snapshots with ease, style, and speed.
+A modern, **feature‑rich** Terminal User Interface (TUI) for **Snapper** written in **Rust**. Manage Btrfs/LVM snapshots with speed, safety, and a cyber‑punk aesthetic.
 
 ![Demo](snapper-TUI-rust.gif)
 
-## 🚀 Features
+## ✨ Features
 
-*   **Modern UI**: A polished "Cyberpunk" aesthetic with smooth animations and a responsive layout.
-*   **Interactive Dashboard**: Browse all your system snapshots in a sortable, scrollable table.
-*   **CRUD Operations**:
-    *   **Create** new snapshots with custom descriptions.
-    *   **Delete** snapshots (supports single or batch deletion via multi-selection).
-    *   **Rollback/Apply** snapshots to revert your system to a previous state.
-*   **Search & Filter**: Quickly find snapshots by description, type, user, or ID using the built-in filter (`/`).
-*   **Detailed Inspection**: View detailed status, metadata, and configuration for any snapshot.
-*   **Safety First**: Confirmation dialogs for destructive actions (delete, rollback) to prevent accidents.
-*   **Async Performance**: Background processing ensures the UI never freezes during long disk operations.
-*   **Mouse Support**: Full mouse interaction for selecting, scrolling, and clicking buttons.
+- **🖥️ Modern UI** – Cyber‑punk theme with smooth animations.
+- **📊 Interactive Dashboard** – Sortable, scrollable table of snapshots.
+- **🛠️ CRUD Operations**
+  - `c` – Create snapshots with custom description.
+  - `d` – Delete (single or batch via multi‑selection).
+  - `a` – Apply / rollback snapshots.
+- **🔎 Search & Filter** – Instant filtering (`/`) by description, type, user, or ID.
+- **🔍 Detailed Inspection** – View status, metadata, and config of any snapshot.
+- **⚠️ Safety First** – Confirmation dialogs for destructive actions.
+- **⚡ Async Performance** – Background processing keeps UI responsive.
+- **🖱️ Full Mouse Support** – Click, scroll, and select with the mouse.
 
 ## 🛠️ Prerequisites
 
-*   **Linux** system.
-*   **Snapper** installed and configured.
-*   **Root/Sudo** privileges are typically required to manage snapshots.
+- Linux system with **Snapper** installed and configured.
+- Root / sudo privileges (required for most snapshot operations).
+- Rust toolchain (`rustc` & `cargo`).
 
 ## 📦 Installation
 
 ### From Source
 
-1.  Ensure you have Rust and Cargo installed.
-2.  Clone the repository:
-    ```bash
-    git clone https://github.com/Vidish/snapper-TUI-rust.git
-    cd snapper-TUI-rust
-    ```
-3.  Build and run:
-    ```bash
-    cargo build --release
-    sudo ./target/release/snapper-TUI-rust
-    ```
-    *(Note: `sudo` is usually required for snapper commands)*
+```bash
+# 1️⃣ Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 2️⃣ Clone the repository
+git clone https://github.com/ulolol/snapper-TUI-rust.git
+cd snapper-TUI-rust
+
+# 3️⃣ Build the binary (release mode)
+cargo build --release
+
+# 4️⃣ Run (usually needs sudo)
+sudo ./target/release/snapper-TUI-rust
+```
+
+### Pre‑built Binaries (optional)
+> sudo ./snapper-TUI-rust
 
 I. Use pre-built binary:
    ```bash
@@ -52,7 +57,7 @@ I. Use pre-built binary:
 ## ⌨️ Keybindings
 
 | Key | Action |
-| :--- | :--- |
+|:---|:---|
 | `q` / `Q` | Quit application |
 | `c` / `C` | **Create** a new snapshot |
 | `d` / `D` | **Delete** selected snapshot(s) |
@@ -60,17 +65,41 @@ I. Use pre-built binary:
 | `r` / `R` | **Refresh** snapshot list |
 | `s` / `S` | Get **Status** of selected snapshot |
 | `/` | **Filter** snapshots |
-| `Space` | **Toggle Selection** (for batch operations) |
+| `Space` | **Toggle Selection** (batch ops) |
 | `↑` / `↓` | Navigate list |
-| `1` - `5` | Sort by column (Number, Type, Date, User, Space) |
+| `1`‑`5` | Sort by column (Number, Type, Date, User, Space) |
 | `Esc` | Cancel popup / Clear filter |
+
+## 🏗️ Architecture Overview
+
+- **UI Layer** – Powered by `ratatui` & `crossterm` for terminal rendering. `tachyonfx` and `color-to-tui` for visual goodies.
+- **State Management** – Central `AppState` struct holds snapshot list, selection state, and loading overlay.
+- **Async Workers** – Snapshot operations run in separate threads, communicating via channels to keep the UI non‑blocking.
+- **Snapper Wrapper** – Thin Rust wrapper around Snapper CLI (`snapper list`, `snapper create`, etc.) handling parsing and error mapping.
+
+## 📚 Usage Example
+
+```bash
+# List snapshots (read‑only)
+snapper list
+
+# Launch the TUI (requires sudo for write ops)
+sudo snapper‑TUI‑rust
+```
+
+Inside the UI, press `c` to create a snapshot, `d` to delete, `a` to apply, and use `/` to filter.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Feel free to submit a Pull Request.
+Contributions are welcome! Feel free to open issues or submit pull requests.
+
+1. Fork the repo.
+2. Create a feature branch (`git checkout -b feat/awesome-feature`).
+3. Open a PR describing your changes.
 
 ## 📄 License
 
 This project is licensed under the [MIT License](LICENSE).
 
-Copyright (c) 2025 Vidish
+---
+© 2025 Vidish
