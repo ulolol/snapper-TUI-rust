@@ -1,5 +1,8 @@
 # snapper‑TUI‑rust 🚀
 
+![Snapper TUI Rust Logo](snapper-tui-rust-logo.gif)
+
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) 
 [![Rust](https://img.shields.io/badge/built_with-Rust-d65d0e.svg)](https://www.rust-lang.org/)
 
