@@ -205,23 +205,6 @@ impl App {
         self.get_selected_snapshot().map(|s| s.number)
     }
     
-    pub fn get_status_selected_snapshot(&mut self) {
-         if let Some(snap) = self.get_selected_snapshot().cloned() {
-            self.message = format!("⏳ Fetching status for {}...", snap.number);
-            match data::get_snapshot_status(&snap) {
-                Ok(status) => {
-                    self.status_text = status;
-                    self.message = format!("✅ Status loaded for snapshot {}.", snap.number);
-                    self.status_scroll = 0; // Reset scroll
-                }
-                Err(e) => {
-                    self.message = format!("❌ Error getting status: {}", e);
-                    self.status_text.clear();
-                }
-            }
-        }
-    }
-
     pub fn on_tick(&mut self) {
         if self.loading {
             self.spinner_state = (self.spinner_state + 1) % self.spinner_frames.len();

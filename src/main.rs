@@ -15,6 +15,26 @@ use ratatui::{
 };
 use crate::{app::{App, AsyncResult}, ui as app_ui}; // Renamed to avoid conflict
 
+/// Fetch snapshot status asynchronously so the TUI stays responsive.
+/// Skips if another async operation is already in progress (app.rx is Some).
+fn fetch_status_async(app: &mut App) {
+    if app.rx.is_some() {
+        return; // Another async operation in progress — skip
+    }
+    if let Some(snap) = app.get_selected_snapshot().cloned() {
+        app.status_text = String::new();
+        app.message = format!("⏳ Fetching status for {}...", snap.number);
+        let (tx, rx) = mpsc::channel();
+        app.rx = Some(rx);
+        thread::spawn(move || {
+            let res = crate::data::get_snapshot_status(&snap)
+                .map(AsyncResult::Status)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Setup terminal
     enable_raw_mode()?;
@@ -275,11 +295,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         KeyCode::Down => {
                             app.next();
-                            app.get_status_selected_snapshot(); // Auto-show status
+                            fetch_status_async(app);
                         }
                         KeyCode::Up => {
                             app.previous();
-                            app.get_status_selected_snapshot(); // Auto-show status
+                            fetch_status_async(app);
                         }
                         KeyCode::Char('d') | KeyCode::Char('D') => app.show_delete_popup = true,
                         KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -435,7 +455,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                         
                                         if target_index < app.snapshots.len() {
                                             app.table_state.select(Some(target_index));
-                                            app.get_status_selected_snapshot(); // Auto-show status
+                                            fetch_status_async(app);
                                         }
                                     }
                                 }
