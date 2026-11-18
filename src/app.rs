@@ -1,9 +1,12 @@
-use crate::data::{self, Snapshot};
+use crate::data::Snapshot;
+use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
-use std::sync::mpsc::Receiver;
 use std::collections::HashSet;
+use std::sync::mpsc::Receiver;
+use std::time::Instant;
 use tachyonfx::Effect;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortKey {
     Number,
     Type,
@@ -12,10 +15,27 @@ pub enum SortKey {
     UsedSpace,
 }
 
-pub enum InputMode {
-    Normal,
-    Editing,
-    Filtering,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionButton {
+    Create,
+    Delete,
+    Apply,
+    Filter,
+    Status,
+    Refresh,
+    Quit,
+}
+
+#[derive(Default, Clone)]
+pub struct UiAreas {
+    pub table: Rect,
+    pub table_header_row: u16,
+    pub table_first_data_row: u16,
+    pub details: Rect,
+    pub status: Rect,
+    pub details_max_scroll: u16,
+    pub status_max_scroll: u16,
+    pub footer_buttons: Vec<(Rect, ActionButton)>,
 }
 
 pub enum AsyncResult {
@@ -23,7 +43,7 @@ pub enum AsyncResult {
     Delete { success: usize, fail: usize },
     Create(String),
     Apply(u32),
-    Status(String),
+    Status { request_id: u64, text: String },
 }
 
 pub struct App {
@@ -32,7 +52,6 @@ pub struct App {
     pub message: String,
     pub loading: bool,
     pub loading_message: String,
-    pub input_mode: InputMode,
     pub status_text: String,
     pub details_scroll: u16,
     pub status_scroll: u16,
@@ -45,13 +64,15 @@ pub struct App {
     pub filter_input: String,
     pub show_apply_popup: bool,
     pub show_splash: bool,
-    pub splash_start: Option<std::time::Instant>,
+    pub splash_start: Option<Instant>,
     pub fx: Option<Effect>,
-    pub fx_start: Option<std::time::Instant>,
+    pub fx_last_tick: Option<Instant>,
     pub current_sort_key: SortKey,
     pub sort_ascending: bool,
     pub rx: Option<Receiver<Result<AsyncResult, String>>>,
-    pub selected_indices: HashSet<usize>,
+    pub selected_keys: HashSet<(String, u32)>,
+    pub status_request_id: u64,
+    pub ui_areas: UiAreas,
 }
 
 impl App {
@@ -62,7 +83,6 @@ impl App {
             message: String::from("⚡ Initializing..."),
             loading: true,
             loading_message: String::from("Loading..."),
-            input_mode: InputMode::Normal,
             status_text: String::new(),
             details_scroll: 0,
             status_scroll: 0,
@@ -75,50 +95,55 @@ impl App {
             filter_input: String::new(),
             show_apply_popup: false,
             show_splash: true,
-            splash_start: Some(std::time::Instant::now()),
+            splash_start: Some(Instant::now()),
             fx: None,
-            fx_start: None,
+            fx_last_tick: None,
             current_sort_key: SortKey::Number,
             sort_ascending: true,
             rx: None,
-            selected_indices: HashSet::new(),
+            selected_keys: HashSet::new(),
+            status_request_id: 0,
+            ui_areas: UiAreas::default(),
         }
     }
 
-    pub fn refresh_snapshots(&mut self) {
-        self.loading = true;
-        self.message = String::from("🔄 Fetching snapshots...");
-        
-        match data::list_snapshots() {
-            Ok(snapshots) => {
-                self.snapshots = snapshots;
-                self.sort_snapshots();
-                self.loading = false;
-                self.message = String::from("✅ Snapshots loaded.");
-                if !self.snapshots.is_empty() {
-                    self.table_state.select(Some(0));
-                }
-            }
-            Err(e) => {
-                self.loading = false;
-                self.message = format!("❌ Error: {}", e);
-            }
-        }
+    pub fn snapshot_key(snap: &Snapshot) -> (String, u32) {
+        (snap.config.clone(), snap.number)
     }
 
     pub fn get_filtered_snapshots(&self) -> Vec<&Snapshot> {
         if self.filter_input.is_empty() {
-            self.snapshots.iter().collect()
+            return self.snapshots.iter().collect();
+        }
+        let query = self.filter_input.to_lowercase();
+        self.snapshots
+            .iter()
+            .filter(|s| {
+                contains_case_insensitive(&s.description, &query)
+                    || contains_case_insensitive(&s.snapshot_type, &query)
+                    || contains_case_insensitive(&s.user, &query)
+                    || contains_case_insensitive(&s.config, &query)
+                    || matches_number(s.number, &query)
+            })
+            .collect()
+    }
+
+    pub fn clamp_selection(&mut self) {
+        let len = self.get_filtered_snapshots().len();
+        if len == 0 {
+            self.table_state.select(None);
         } else {
-            self.snapshots
-                .iter()
-                .filter(|s| {
-                    s.description.to_lowercase().contains(&self.filter_input.to_lowercase())
-                        || s.snapshot_type.to_lowercase().contains(&self.filter_input.to_lowercase())
-                        || s.user.to_lowercase().contains(&self.filter_input.to_lowercase())
-                        || s.number.to_string().contains(&self.filter_input)
-                })
-                .collect()
+            let idx = self.table_state.selected().unwrap_or(0).min(len - 1);
+            self.table_state.select(Some(idx));
+        }
+        self.details_scroll = 0;
+    }
+
+    pub fn select_row(&mut self, index: usize) {
+        let len = self.get_filtered_snapshots().len();
+        if index < len {
+            self.table_state.select(Some(index));
+            self.details_scroll = 0;
         }
     }
 
@@ -126,16 +151,12 @@ impl App {
         let filtered_len = self.get_filtered_snapshots().len();
         if filtered_len > 0 {
             let i = match self.table_state.selected() {
-                Some(i) => {
-                    if i >= filtered_len - 1 {
-                        0
-                    } else {
-                        i + 1
-                    }
-                }
+                Some(i) if i >= filtered_len - 1 => 0,
+                Some(i) => i + 1,
                 None => 0,
             };
             self.table_state.select(Some(i));
+            self.details_scroll = 0;
         }
     }
 
@@ -143,47 +164,61 @@ impl App {
         let filtered_len = self.get_filtered_snapshots().len();
         if filtered_len > 0 {
             let i = match self.table_state.selected() {
-                Some(i) => {
-                    if i == 0 {
-                        filtered_len - 1
-                    } else {
-                        i - 1
-                    }
-                }
-                None => 0,
+                Some(0) | None => filtered_len - 1,
+                Some(i) => i.min(filtered_len - 1).saturating_sub(1),
             };
-            self.table_state.select(Some(i));
+            if self.table_state.selected().is_none() {
+                self.table_state.select(Some(0));
+            } else {
+                self.table_state.select(Some(i));
+            }
+            self.details_scroll = 0;
+        }
+    }
+
+    pub fn page_down(&mut self, step: usize) {
+        let filtered_len = self.get_filtered_snapshots().len();
+        if filtered_len > 0 {
+            let cur = self.table_state.selected().unwrap_or(0);
+            let next = (cur + step).min(filtered_len - 1);
+            self.table_state.select(Some(next));
+            self.details_scroll = 0;
+        }
+    }
+
+    pub fn page_up(&mut self, step: usize) {
+        let filtered_len = self.get_filtered_snapshots().len();
+        if filtered_len > 0 {
+            let cur = self.table_state.selected().unwrap_or(0);
+            let next = cur.saturating_sub(step);
+            self.table_state.select(Some(next));
+            self.details_scroll = 0;
         }
     }
 
     pub fn get_selected_snapshot(&self) -> Option<&Snapshot> {
-        self.table_state.selected().and_then(|i| self.snapshots.get(i))
+        let idx = self.table_state.selected()?;
+        self.get_filtered_snapshots().get(idx).copied()
     }
 
-    pub fn get_targets_for_delete(&self) -> Vec<u32> {
-        if !self.selected_indices.is_empty() {
-            // Delete all selected snapshots
-            self.selected_indices.iter()
-                .filter_map(|&idx| self.snapshots.get(idx))
-                .map(|snapshot| snapshot.number)
+    pub fn get_targets_for_delete(&self) -> Vec<(String, u32)> {
+        if !self.selected_keys.is_empty() {
+            self.snapshots
+                .iter()
+                .filter(|s| self.selected_keys.contains(&(s.config.clone(), s.number)))
+                .map(Self::snapshot_key)
                 .collect()
-        } else if let Some(idx) = self.table_state.selected() {
-            // Delete single currently highlighted snapshot
-            if let Some(snapshot) = self.snapshots.get(idx) {
-                vec![snapshot.number]
-            } else {
-                vec![]
-            }
+        } else if let Some(snapshot) = self.get_selected_snapshot() {
+            vec![Self::snapshot_key(snapshot)]
         } else {
             vec![]
         }
     }
 
     pub fn handle_delete_result(&mut self, success_count: usize, error_count: usize) {
-        // Update message
         if success_count > 0 {
             self.message = if success_count == 1 {
-                format!("🗑️ Deleted 1 snapshot")
+                String::from("🗑️ Deleted 1 snapshot")
             } else {
                 format!("🗑️ Deleted {} snapshots", success_count)
             };
@@ -194,17 +229,13 @@ impl App {
             self.message = format!("❌ Failed to delete {} snapshot(s)", error_count);
         }
 
-        // Clear selections and refresh
         self.clear_selections();
-        // Note: Refreshing snapshots should be done by the caller (main.rs) via thread
-        // or we can trigger it here if we move the thread logic? 
-        // For now, main.rs handles the refresh trigger.
     }
 
-    pub fn get_target_for_apply(&self) -> Option<u32> {
-        self.get_selected_snapshot().map(|s| s.number)
+    pub fn get_target_for_apply(&self) -> Option<(String, u32)> {
+        self.get_selected_snapshot().map(Self::snapshot_key)
     }
-    
+
     pub fn on_tick(&mut self) {
         if self.loading {
             self.spinner_state = (self.spinner_state + 1) % self.spinner_frames.len();
@@ -213,33 +244,22 @@ impl App {
 
     pub fn scroll_details(&mut self, up: bool) {
         if up {
-            if self.details_scroll > 0 {
-                self.details_scroll -= 1;
-            }
-        } else {
-            self.details_scroll += 1;
+            self.details_scroll = self.details_scroll.saturating_sub(1);
+        } else if self.details_scroll < self.ui_areas.details_max_scroll {
+            self.details_scroll = self.details_scroll.saturating_add(1);
         }
     }
 
     pub fn scroll_status(&mut self, up: bool) {
         if up {
-            if self.status_scroll > 0 {
-                self.status_scroll -= 1;
-            }
-        } else {
-            self.status_scroll += 1;
+            self.status_scroll = self.status_scroll.saturating_sub(1);
+        } else if self.status_scroll < self.ui_areas.status_max_scroll {
+            self.status_scroll = self.status_scroll.saturating_add(1);
         }
     }
 
     pub fn set_sort_key(&mut self, key: SortKey) {
-        // Toggle ascending/descending if same key
-        if matches!((&self.current_sort_key, &key),
-            (SortKey::Number, SortKey::Number) |
-            (SortKey::Type, SortKey::Type) |
-            (SortKey::Date, SortKey::Date) |
-            (SortKey::User, SortKey::User) |
-            (SortKey::UsedSpace, SortKey::UsedSpace))
-        {
+        if self.current_sort_key == key {
             self.sort_ascending = !self.sort_ascending;
         } else {
             self.current_sort_key = key;
@@ -251,61 +271,109 @@ impl App {
     pub fn sort_snapshots(&mut self) {
         match self.current_sort_key {
             SortKey::Number => {
-                self.snapshots.sort_by_key(|s| s.number);
+                self.snapshots.sort_by(|a, b| {
+                    a.number.cmp(&b.number).then_with(|| a.config.cmp(&b.config))
+                });
             }
             SortKey::Type => {
-                self.snapshots.sort_by(|a, b| a.snapshot_type.cmp(&b.snapshot_type));
+                self.snapshots.sort_by(|a, b| {
+                    a.snapshot_type
+                        .cmp(&b.snapshot_type)
+                        .then_with(|| a.number.cmp(&b.number))
+                });
             }
             SortKey::Date => {
-                self.snapshots.sort_by(|a, b| a.date.cmp(&b.date));
+                self.snapshots.sort_by(|a, b| {
+                    a.date.cmp(&b.date).then_with(|| a.number.cmp(&b.number))
+                });
             }
             SortKey::User => {
-                self.snapshots.sort_by(|a, b| a.user.cmp(&b.user));
+                self.snapshots.sort_by(|a, b| {
+                    a.user.cmp(&b.user).then_with(|| a.number.cmp(&b.number))
+                });
             }
             SortKey::UsedSpace => {
-                self.snapshots.sort_by_key(|s| s.used_space.unwrap_or(0));
+                self.snapshots.sort_by(|a, b| {
+                    a.used_space
+                        .unwrap_or(0)
+                        .cmp(&b.used_space.unwrap_or(0))
+                        .then_with(|| a.number.cmp(&b.number))
+                });
             }
         }
         if !self.sort_ascending {
             self.snapshots.reverse();
         }
+        self.clamp_selection();
     }
 
     pub fn get_sort_indicator(&self, key: SortKey) -> &'static str {
-        let is_active = matches!((&self.current_sort_key, &key),
-            (SortKey::Number, SortKey::Number) |
-            (SortKey::Type, SortKey::Type) |
-            (SortKey::Date, SortKey::Date) |
-            (SortKey::User, SortKey::User) |
-            (SortKey::UsedSpace, SortKey::UsedSpace));
-        
-        if is_active {
+        if self.current_sort_key == key {
             if self.sort_ascending { " ↑" } else { " ↓" }
         } else {
             ""
         }
     }
-    
+
     pub fn toggle_selection(&mut self) {
-        if let Some(idx) = self.table_state.selected() {
-            if self.selected_indices.contains(&idx) {
-                self.selected_indices.remove(&idx);
-            } else {
-                self.selected_indices.insert(idx);
+        if let Some(snap) = self.get_selected_snapshot() {
+            let key = Self::snapshot_key(snap);
+            if !self.selected_keys.remove(&key) {
+                self.selected_keys.insert(key);
             }
         }
     }
-    
+
     pub fn clear_selections(&mut self) {
-        self.selected_indices.clear();
+        self.selected_keys.clear();
     }
-    
+
     pub fn get_selected_count(&self) -> usize {
-        self.selected_indices.len()
+        self.selected_keys.len()
     }
 }
 
-// Helper function for human-readable sizes
+/// Case-insensitive substring match with a zero-allocation ASCII fast path.
+fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if haystack.is_ascii() && needle_lower.is_ascii() {
+        let h = haystack.as_bytes();
+        let n = needle_lower.as_bytes();
+        if n.len() > h.len() {
+            return false;
+        }
+        return h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
+    }
+    haystack.to_lowercase().contains(needle_lower)
+}
+
+/// Check if a snapshot number's decimal representation contains `query` without allocating.
+fn matches_number(mut num: u32, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if !query.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let mut buf = [b'0'; 10];
+    let mut pos = buf.len();
+    if num == 0 {
+        pos -= 1;
+        buf[pos] = b'0';
+    } else {
+        while num > 0 {
+            pos -= 1;
+            buf[pos] = b'0' + (num % 10) as u8;
+            num /= 10;
+        }
+    }
+    let num_str = std::str::from_utf8(&buf[pos..]).unwrap_or("");
+    num_str.contains(query)
+}
+
+/// Helper function for human-readable sizes.
 pub fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{}B", bytes)
@@ -315,5 +383,70 @@ pub fn format_size(bytes: u64) -> String {
         format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_snap(config: &str, number: u32, desc: &str) -> Snapshot {
+        Snapshot {
+            config: config.to_string(),
+            subvolume: format!("/.snapshots/{}/snapshot", number),
+            number,
+            snapshot_type: "single".to_string(),
+            pre_number: None,
+            post_number: None,
+            date: format!("2025-01-{:02} 10:00:00", (number % 28) + 1),
+            user: "root".to_string(),
+            cleanup: None,
+            description: desc.to_string(),
+            userdata: None,
+            used_space: Some(number as u64 * 1024),
+            default: false,
+            active: false,
+        }
+    }
+
+    #[test]
+    fn test_selected_snapshot_respects_filter() {
+        let mut app = App::new();
+        app.snapshots = vec![
+            make_snap("root", 1, "first"),
+            make_snap("root", 2, "pacman upgrade"),
+            make_snap("home", 3, "home backup"),
+        ];
+        app.filter_input = "pacman".to_string();
+        app.table_state.select(Some(0));
+
+        let selected = app.get_selected_snapshot().unwrap();
+        assert_eq!(selected.number, 2);
+        assert_eq!(selected.description, "pacman upgrade");
+    }
+
+    #[test]
+    fn test_multi_selection_persists_across_sort_and_filter() {
+        let mut app = App::new();
+        app.snapshots = vec![
+            make_snap("root", 10, "alpha"),
+            make_snap("root", 2, "beta"),
+            make_snap("home", 2, "gamma"),
+        ];
+        app.table_state.select(Some(1)); // ("root", 2)
+        app.toggle_selection();
+
+        // Re-sort by number ascending -> ("home", 2), ("root", 2), ("root", 10)
+        app.sort_snapshots();
+        let targets = app.get_targets_for_delete();
+        assert_eq!(targets, vec![("root".to_string(), 2)]);
+    }
+
+    #[test]
+    fn test_format_size() {
+        assert_eq!(format_size(512), "512B");
+        assert_eq!(format_size(2048), "2.0K");
+        assert_eq!(format_size(5 * 1024 * 1024), "5.0M");
+        assert_eq!(format_size(2 * 1024 * 1024 * 1024), "2.0G");
     }
 }

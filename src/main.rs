@@ -2,51 +2,72 @@ mod app;
 mod data;
 mod ui;
 
-use std::{io, thread, time::Duration};
-use std::sync::mpsc;
+use crate::{
+    app::{ActionButton, App, AsyncResult, SortKey},
+    ui as app_ui,
+};
 use ratatui::{
     backend::CrosstermBackend,
     crossterm::{
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+        event::{
+            self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind,
+            KeyModifiers, MouseButton, MouseEventKind,
+        },
         execute,
         terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     },
+    layout::Rect,
     Terminal,
 };
-use crate::{app::{App, AsyncResult}, ui as app_ui}; // Renamed to avoid conflict
+use std::{io, sync::mpsc, thread, time::Duration};
 
-/// Fetch snapshot status asynchronously so the TUI stays responsive.
-/// Skips if another async operation is already in progress (app.rx is Some).
-fn fetch_status_async(app: &mut App) {
-    if app.rx.is_some() {
-        return; // Another async operation in progress — skip
-    }
-    if let Some(snap) = app.get_selected_snapshot().cloned() {
-        app.status_text = String::new();
-        app.message = format!("⏳ Fetching status for {}...", snap.number);
-        let (tx, rx) = mpsc::channel();
-        app.rx = Some(rx);
-        thread::spawn(move || {
-            let res = crate::data::get_snapshot_status(&snap)
-                .map(AsyncResult::Status)
-                .map_err(|e| e.to_string());
-            let _ = tx.send(res);
-        });
+struct TerminalGuard {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+}
+
+impl TerminalGuard {
+    fn new() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        if let Err(err) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+            let _ = disable_raw_mode();
+            return Err(err);
+        }
+        let backend = CrosstermBackend::new(stdout);
+        match Terminal::new(backend) {
+            Ok(terminal) => Ok(Self { terminal }),
+            Err(err) => {
+                let mut stdout = io::stdout();
+                let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+                let _ = disable_raw_mode();
+                Err(err)
+            }
+        }
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        let _ = self.terminal.show_cursor();
+    }
+}
 
-    // Create app and run
-    let mut app = App::new();
-    
-    // Start initial load in a separate thread
+fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
+    col >= r.x
+        && col < r.x.saturating_add(r.width)
+        && row >= r.y
+        && row < r.y.saturating_add(r.height)
+}
+
+fn spawn_refresh(app: &mut App, loading_msg: &str) {
+    app.loading = true;
+    app.loading_message = loading_msg.to_string();
     let (tx, rx) = mpsc::channel();
     app.rx = Some(rx);
     thread::spawn(move || {
@@ -55,168 +76,226 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| e.to_string());
         let _ = tx.send(res);
     });
+}
 
-    let res = run_app(&mut terminal, &mut app);
+fn spawn_status_fetch(app: &mut App, blocking_overlay: bool) {
+    if app.loading {
+        return;
+    }
+    if let Some(snap) = app.get_selected_snapshot().cloned() {
+        app.status_request_id = app.status_request_id.wrapping_add(1);
+        let request_id = app.status_request_id;
+        app.status_text.clear();
+        app.message = format!("⏳ Fetching status for {}...", snap.number);
+        if blocking_overlay {
+            app.loading = true;
+            app.loading_message = format!("Fetching status for {}...", snap.number);
+        }
+        let (tx, rx) = mpsc::channel();
+        app.rx = Some(rx);
+        thread::spawn(move || {
+            let res = crate::data::get_snapshot_status(&snap)
+                .map(|text| AsyncResult::Status { request_id, text })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(res);
+        });
+    }
+}
 
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+fn trigger_apply(app: &mut App) {
+    if app.get_selected_count() > 0 {
+        app.message = String::from(
+            "❌ Error: Cannot apply with multi-selection active. Clear selections first (Space or Esc).",
+        );
+    } else if app.get_selected_snapshot().is_some() {
+        app.show_apply_popup = true;
+    }
+}
+
+fn trigger_status(app: &mut App) {
+    if app.get_selected_count() > 0 {
+        app.message = String::from(
+            "❌ Error: Cannot get status with multi-selection active. Clear selections first.",
+        );
+    } else {
+        spawn_status_fetch(app, true);
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut guard = TerminalGuard::new()?;
+    let mut app = App::new();
+
+    // Start initial load in a separate thread
+    spawn_refresh(&mut app, "Loading...");
+
+    let res = run_app(&mut guard.terminal, &mut app);
+    drop(guard);
 
     if let Err(err) = res {
-        println!("{:?}", err);
+        eprintln!("{:?}", err);
     }
 
     Ok(())
 }
 
-fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
+fn run_app<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+    app: &mut App,
+) -> io::Result<()> {
     loop {
         terminal.draw(|f| app_ui::draw(f, app))?;
 
         // Check for threaded results
-        if let Some(rx) = &app.rx {
-            if let Ok(result) = rx.try_recv() {
+        if let Some(rx) = &app.rx
+            && let Ok(result) = rx.try_recv()
+        {
                 app.loading = false;
-                app.rx = None; // Stop checking
+                app.rx = None;
                 match result {
                     Ok(AsyncResult::Snapshots(snapshots)) => {
                         app.snapshots = snapshots;
+                        app.sort_snapshots();
                         app.message = format!("✅ Loaded {} snapshots.", app.snapshots.len());
-                        if !app.snapshots.is_empty() {
-                            app.table_state.select(Some(0));
-                        }
                     }
                     Ok(AsyncResult::Create(name)) => {
                         app.message = format!("✅ Snapshot created: {}", name);
-                        // Trigger refresh
-                        app.loading = true;
-                        app.loading_message = String::from("Refreshing...");
-                        let (tx, rx) = mpsc::channel();
-                        app.rx = Some(rx);
-                        thread::spawn(move || {
-                            let res = crate::data::list_snapshots()
-                                .map(AsyncResult::Snapshots)
-                                .map_err(|e| e.to_string());
-                            let _ = tx.send(res);
-                        });
+                        spawn_refresh(app, "Refreshing...");
                     }
                     Ok(AsyncResult::Delete { success, fail }) => {
                         app.handle_delete_result(success, fail);
-                        // Trigger refresh
-                        app.loading = true;
-                        app.loading_message = String::from("Refreshing...");
-                        let (tx, rx) = mpsc::channel();
-                        app.rx = Some(rx);
-                        thread::spawn(move || {
-                            let res = crate::data::list_snapshots()
-                                .map(AsyncResult::Snapshots)
-                                .map_err(|e| e.to_string());
-                            let _ = tx.send(res);
-                        });
+                        spawn_refresh(app, "Refreshing...");
                     }
                     Ok(AsyncResult::Apply(number)) => {
-                        app.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
+                        app.message =
+                            format!("✅ Snapshot {} applied. Reboot to take effect.", number);
                     }
-                    Ok(AsyncResult::Status(status)) => {
-                        app.status_text = status;
-                        app.message = String::from("✅ Status loaded.");
-                        app.status_scroll = 0;
+                    Ok(AsyncResult::Status { request_id, text }) => {
+                        if request_id == app.status_request_id {
+                            app.status_text = text;
+                            app.message = String::from("✅ Status loaded.");
+                            app.status_scroll = 0;
+                        }
                     }
                     Err(e) => {
                         app.message = format!("❌ Error: {}", e);
                     }
                 }
-            }
         }
 
         // Handle events
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
+                    if key.kind == KeyEventKind::Release {
+                        continue;
+                    }
+
+                    // Always allow Ctrl+C to exit cleanly
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        return Ok(());
+                    }
+
                     // Splash Screen Handling
                     if app.show_splash {
-                        app.show_splash = false; // Dismiss on any key
+                        if key.kind == KeyEventKind::Press {
+                            app.show_splash = false;
+                        }
+                        continue;
+                    }
+
+                    // Ignore other input while a blocking operation is running
+                    if app.loading {
                         continue;
                     }
 
                     // Popup Handling
                     if app.show_delete_popup {
-                        match key.code {
-                            KeyCode::Enter => {
-                                let targets = app.get_targets_for_delete();
-                                if !targets.is_empty() {
-                                    app.loading = true;
-                                    app.loading_message = format!("Deleting {} snapshot(s)...", targets.len());
-                                    
-                                    let (tx, rx) = mpsc::channel();
-                                    app.rx = Some(rx);
-                                    
-                                    thread::spawn(move || {
-                                        let mut success_count = 0;
-                                        let mut error_count = 0;
-                                        
-                                        for number in targets {
-                                            match crate::data::delete_snapshot(number) {
-                                                Ok(_) => success_count += 1,
-                                                Err(_) => error_count += 1,
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    let targets = app.get_targets_for_delete();
+                                    if !targets.is_empty() {
+                                        app.loading = true;
+                                        app.loading_message =
+                                            format!("Deleting {} snapshot(s)...", targets.len());
+
+                                        let (tx, rx) = mpsc::channel();
+                                        app.rx = Some(rx);
+
+                                        thread::spawn(move || {
+                                            let mut success_count = 0;
+                                            let mut error_count = 0;
+
+                                            for (config, number) in targets {
+                                                match crate::data::delete_snapshot(&config, number)
+                                                {
+                                                    Ok(_) => success_count += 1,
+                                                    Err(_) => error_count += 1,
+                                                }
                                             }
-                                        }
-                                        
-                                        let res = Ok(AsyncResult::Delete { success: success_count, fail: error_count });
-                                        let _ = tx.send(res);
-                                    });
+
+                                            let _ = tx.send(Ok(AsyncResult::Delete {
+                                                success: success_count,
+                                                fail: error_count,
+                                            }));
+                                        });
+                                    }
+                                    app.show_delete_popup = false;
                                 }
-                                app.show_delete_popup = false;
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.show_delete_popup = false;
+                                }
+                                _ => {}
                             }
-                            KeyCode::Esc | KeyCode::Char('q') => {
-                                app.show_delete_popup = false;
-                            }
-                            _ => {}
                         }
                         continue;
                     }
+
                     if app.show_apply_popup {
-                        match key.code {
-                            KeyCode::Enter => {
-                                if let Some(number) = app.get_target_for_apply() {
-                                    app.loading = true;
-                                    app.loading_message = format!("Applying snapshot {}...", number);
-                                    
-                                    let (tx, rx) = mpsc::channel();
-                                    app.rx = Some(rx);
-                                    
-                                    thread::spawn(move || {
-                                        let res = crate::data::rollback_snapshot(number)
-                                            .map(|_| AsyncResult::Apply(number))
-                                            .map_err(|e| e.to_string());
-                                        let _ = tx.send(res);
-                                    });
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    if let Some((config, number)) = app.get_target_for_apply() {
+                                        app.loading = true;
+                                        app.loading_message =
+                                            format!("Applying snapshot {}...", number);
+
+                                        let (tx, rx) = mpsc::channel();
+                                        app.rx = Some(rx);
+
+                                        thread::spawn(move || {
+                                            let res =
+                                                crate::data::rollback_snapshot(&config, number)
+                                                    .map(|_| AsyncResult::Apply(number))
+                                                    .map_err(|e| e.to_string());
+                                            let _ = tx.send(res);
+                                        });
+                                    }
+                                    app.show_apply_popup = false;
                                 }
-                                app.show_apply_popup = false;
+                                KeyCode::Esc | KeyCode::Char('q') => {
+                                    app.show_apply_popup = false;
+                                }
+                                _ => {}
                             }
-                            KeyCode::Esc | KeyCode::Char('q') => {
-                                app.show_apply_popup = false;
-                            }
-                            _ => {}
                         }
                         continue;
                     }
+
                     if app.show_create_popup {
                         match key.code {
-                            KeyCode::Enter => {
-                                if !app.create_input.is_empty() {
+                            KeyCode::Enter if key.kind == KeyEventKind::Press => {
+                                let input = app.create_input.trim().to_string();
+                                if !input.is_empty() {
                                     app.loading = true;
                                     app.loading_message = String::from("Creating snapshot...");
-                                    
-                                    let input = app.create_input.clone();
+
                                     let (tx, rx) = mpsc::channel();
                                     app.rx = Some(rx);
-                                    
+
                                     thread::spawn(move || {
                                         let res = crate::data::create_snapshot(&input)
                                             .map(|_| AsyncResult::Create(input))
@@ -227,7 +306,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                                     app.show_create_popup = false;
                                 }
                             }
-                            KeyCode::Esc => {
+                            KeyCode::Esc if key.kind == KeyEventKind::Press => {
                                 app.show_create_popup = false;
                                 app.create_input.clear();
                             }
@@ -241,23 +320,26 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         }
                         continue;
                     }
+
                     if app.filtering {
                         match key.code {
-                            KeyCode::Enter => {
+                            KeyCode::Enter if key.kind == KeyEventKind::Press => {
                                 app.filtering = false;
                             }
-                            KeyCode::Esc => {
+                            KeyCode::Esc if key.kind == KeyEventKind::Press => {
                                 app.filtering = false;
                                 app.filter_input.clear();
-                                app.table_state.select(Some(0));
+                                app.clamp_selection();
                             }
                             KeyCode::Char(c) => {
                                 app.filter_input.push(c);
                                 app.table_state.select(Some(0));
+                                app.clamp_selection();
                             }
                             KeyCode::Backspace => {
                                 app.filter_input.pop();
                                 app.table_state.select(Some(0));
+                                app.clamp_selection();
                             }
                             _ => {}
                         }
@@ -265,198 +347,166 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
 
                     match key.code {
-                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
-                        KeyCode::Char('c') | KeyCode::Char('C') => {
+                        KeyCode::Char('q') | KeyCode::Char('Q')
+                            if key.kind == KeyEventKind::Press =>
+                        {
+                            return Ok(());
+                        }
+                        KeyCode::Char('c') | KeyCode::Char('C')
+                            if key.kind == KeyEventKind::Press =>
+                        {
                             app.show_create_popup = true;
                         }
-                        KeyCode::Char('/') => {
+                        KeyCode::Char('/') if key.kind == KeyEventKind::Press => {
                             app.filtering = true;
                         }
-                        KeyCode::Char('r') | KeyCode::Char('R') => {
-                            app.loading = true;
-                            app.loading_message = String::from("Refreshing...");
-                            app.snapshots.clear();
-                            
-                            let (tx, rx) = mpsc::channel();
-                            app.rx = Some(rx);
-                            thread::spawn(move || {
-                                let res = crate::data::list_snapshots()
-                                    .map(AsyncResult::Snapshots)
-                                    .map_err(|e| e.to_string());
-                                let _ = tx.send(res);
-                            });
-                        }
-                        KeyCode::Char('a') | KeyCode::Char('A') => {
-                            if app.get_selected_count() > 0 {
-                                app.message = "❌ Error: Cannot apply with multi-selection active. Clear selections first (select with space to deselect).".to_string();
-                            } else {
-                                app.show_apply_popup = true;
+                        KeyCode::Esc if key.kind == KeyEventKind::Press => {
+                            if !app.filter_input.is_empty() {
+                                app.filter_input.clear();
+                                app.clamp_selection();
+                            } else if app.get_selected_count() > 0 {
+                                app.clear_selections();
                             }
                         }
-                        KeyCode::Down => {
+                        KeyCode::Char('r') | KeyCode::Char('R')
+                            if key.kind == KeyEventKind::Press =>
+                        {
+                            spawn_refresh(app, "Refreshing...");
+                        }
+                        KeyCode::Char('a') | KeyCode::Char('A')
+                            if key.kind == KeyEventKind::Press =>
+                        {
+                            trigger_apply(app);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
                             app.next();
-                            fetch_status_async(app);
+                            spawn_status_fetch(app, false);
                         }
-                        KeyCode::Up => {
+                        KeyCode::Up | KeyCode::Char('k') => {
                             app.previous();
-                            fetch_status_async(app);
+                            spawn_status_fetch(app, false);
                         }
-                        KeyCode::Char('d') | KeyCode::Char('D') => app.show_delete_popup = true,
-                        KeyCode::Char('s') | KeyCode::Char('S') => {
-                            if app.get_selected_count() > 0 {
-                                app.message = "❌ Error: Cannot get status with multi-selection active. Clear selections first.".to_string();
-                            } else {
-                                if let Some(snap) = app.get_selected_snapshot().cloned() {
-                                    app.loading = true;
-                                    app.loading_message = format!("Fetching status for {}...", snap.number);
-                                    let (tx, rx) = mpsc::channel();
-                                    app.rx = Some(rx);
-                                    thread::spawn(move || {
-                                        let res = crate::data::get_snapshot_status(&snap)
-                                            .map(AsyncResult::Status)
-                                            .map_err(|e| e.to_string());
-                                        let _ = tx.send(res);
-                                    });
-                                }
+                        KeyCode::PageDown => {
+                            app.page_down(10);
+                            spawn_status_fetch(app, false);
+                        }
+                        KeyCode::PageUp => {
+                            app.page_up(10);
+                            spawn_status_fetch(app, false);
+                        }
+                        KeyCode::Char('d') | KeyCode::Char('D')
+                            if key.kind == KeyEventKind::Press =>
+                        {
+                            if !app.get_targets_for_delete().is_empty() {
+                                app.show_delete_popup = true;
                             }
                         }
-                        KeyCode::Char(' ') => app.toggle_selection(),
+                        KeyCode::Char('s') | KeyCode::Char('S')
+                            if key.kind == KeyEventKind::Press =>
+                        {
+                            trigger_status(app);
+                        }
+                        KeyCode::Char(' ') if key.kind == KeyEventKind::Press => {
+                            app.toggle_selection();
+                        }
                         // Sorting keybinds
-                        KeyCode::Char('1') => app.set_sort_key(crate::app::SortKey::Number),
-                        KeyCode::Char('2') => app.set_sort_key(crate::app::SortKey::Type),
-                        KeyCode::Char('3') => app.set_sort_key(crate::app::SortKey::Date),
-                        KeyCode::Char('4') => app.set_sort_key(crate::app::SortKey::User),
-                        KeyCode::Char('5') => app.set_sort_key(crate::app::SortKey::UsedSpace),
+                        KeyCode::Char('1') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::Number);
+                        }
+                        KeyCode::Char('2') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::Type);
+                        }
+                        KeyCode::Char('3') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::Date);
+                        }
+                        KeyCode::Char('4') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::User);
+                        }
+                        KeyCode::Char('5') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::UsedSpace);
+                        }
                         _ => {}
                     }
                 }
                 Event::Mouse(mouse) => {
+                    if app.show_splash
+                        || app.loading
+                        || app.show_delete_popup
+                        || app.show_create_popup
+                        || app.show_apply_popup
+                    {
+                        continue;
+                    }
+
                     match mouse.kind {
-                        event::MouseEventKind::ScrollDown | event::MouseEventKind::ScrollUp => {
-                            let term_size = terminal.size()?;
-                            let is_scroll_up = matches!(mouse.kind, event::MouseEventKind::ScrollUp);
-                            
-                            // Calculate layout boundaries
-                            // Calculate layout boundaries
-                            // Layout: TopGap(1) + Header(5) + Gap(1) + Main + Gap(1) + Footer(3) + BottomGap(1)
-                            let header_offset = 7; // 1 + 5 + 1
-                            let footer_height = 3;
-                            let bottom_gap = 1;
-                            let main_area_start = header_offset;
-                            let main_area_end = term_size.height.saturating_sub(footer_height + bottom_gap + 1); // +1 for the gap above footer
-                            
-                            // Check if mouse is in main area
-                            if mouse.row >= main_area_start && mouse.row < main_area_end {
-                                // Main area is split 50/50 horizontally
-                                let half_width = term_size.width / 2;
-                                
-                                // Right panel (Details + Status)
-                                if mouse.column >= half_width {
-                                    // Right panel is split vertically: 40% Details, 60% Status
-                                    let right_panel_height = main_area_end - main_area_start;
-                                    let details_height = (right_panel_height * 40) / 100;
-                                    let details_end_row = main_area_start + details_height;
-                                    
-                                    if mouse.row < details_end_row {
-                                        // Mouse is in Details pane
-                                        app.scroll_details(is_scroll_up);
-                                    } else {
-                                        // Mouse is in Status pane
-                                        app.scroll_status(is_scroll_up);
-                                    }
+                        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                            let is_scroll_up = matches!(mouse.kind, MouseEventKind::ScrollUp);
+                            if rect_contains(app.ui_areas.details, mouse.column, mouse.row) {
+                                app.scroll_details(is_scroll_up);
+                            } else if rect_contains(app.ui_areas.status, mouse.column, mouse.row) {
+                                app.scroll_status(is_scroll_up);
+                            } else if rect_contains(app.ui_areas.table, mouse.column, mouse.row) {
+                                if is_scroll_up {
+                                    app.previous();
+                                } else {
+                                    app.next();
                                 }
-                                // Left panel (table) - no scrolling needed
+                                spawn_status_fetch(app, false);
                             }
                         }
-                        event::MouseEventKind::Down(event::MouseButton::Left) => {
-                            let term_size = terminal.size()?;
-                            // Footer starts at Height - BottomGap(1) - Footer(3)
-                            let footer_row = term_size.height.saturating_sub(4);
-                            let is_in_footer = mouse.row >= footer_row && mouse.row < term_size.height.saturating_sub(1);
-                            
-                            // Layout: TopGap(1) + Header(5) + Gap(1) = 7
-                            let main_area_start = 7;
-                            
-                            if is_in_footer {
-                                // Footer button clicks
-                                let col = mouse.column;
-                                if col >= 10 && col < 20 { app.show_delete_popup = true; }
-                                else if col >= 20 && col < 30 { app.show_apply_popup = true; }
-                                else if col >= 30 && col < 40 { 
-                                    if let Some(snap) = app.get_selected_snapshot().cloned() {
-                                        app.loading = true;
-                                        app.loading_message = format!("Fetching status for {}...", snap.number);
-                                        let (tx, rx) = mpsc::channel();
-                                        app.rx = Some(rx);
-                                        thread::spawn(move || {
-                                            let res = crate::data::get_snapshot_status(&snap)
-                                                .map(AsyncResult::Status)
-                                                .map_err(|e| e.to_string());
-                                            let _ = tx.send(res);
-                                        });
+                        MouseEventKind::Down(MouseButton::Left) => {
+                            if let Some((_, action)) = app
+                                .ui_areas
+                                .footer_buttons
+                                .iter()
+                                .find(|(rect, _)| rect_contains(*rect, mouse.column, mouse.row))
+                                .copied()
+                            {
+                                match action {
+                                    ActionButton::Create => app.show_create_popup = true,
+                                    ActionButton::Delete => {
+                                        if !app.get_targets_for_delete().is_empty() {
+                                            app.show_delete_popup = true;
+                                        }
                                     }
+                                    ActionButton::Apply => trigger_apply(app),
+                                    ActionButton::Filter => app.filtering = true,
+                                    ActionButton::Status => trigger_status(app),
+                                    ActionButton::Refresh => spawn_refresh(app, "Refreshing..."),
+                                    ActionButton::Quit => return Ok(()),
                                 }
-                                else if col >= 40 && col < 50 { 
-                                    app.loading = true;
-                                    app.loading_message = String::from("Refreshing...");
-                                    app.snapshots.clear();
-                                    let (tx, rx) = mpsc::channel();
-                                    app.rx = Some(rx);
-                                    thread::spawn(move || {
-                                        let res = crate::data::list_snapshots()
-                                            .map(AsyncResult::Snapshots)
-                                            .map_err(|e| e.to_string());
-                                        let _ = tx.send(res);
-                                    });
-                                }
-                                else if col >= 50 && col < 60 { return Ok(()); }
-                            } else if mouse.row >= main_area_start && mouse.row < footer_row {
-                                // Main area - check if left panel (table)
-                                let half_width = term_size.width / 2;
-                                let left_padding = 2;
-                                
-                                if mouse.column >= left_padding && mouse.column < half_width {
-                                    // Adjust column for padding
-                                    let effective_col = mouse.column - left_padding;
-                                    // Table block starts at main_area_start
-                                    // Border = 1 row, Header = 1 row
-                                    // Table block starts at main_area_start
-                                    // Border = 1 row, Header = 1 row
-                                    let table_border_top = main_area_start;
-                                    let table_header_row = table_border_top + 1;
-                                    let first_data_row = table_header_row + 1;
-                                    
-                                    if mouse.row == table_header_row {
-                                        // Clicked on table header - determine column for sorting
-                                        let col_x = effective_col;
-                                        
-                                        // Column boundaries based on UI constraints:
-                                        // Border: 1
-                                        // Col 1 (Number): 8 -> End 9
-                                        // Col 2 (Type): 10 -> End 19
-                                        // Col 3 (Date): 22 -> End 41
-                                        // Col 4 (User): 12 -> End 53
-                                        // Col 5 (Space): 12 -> End 65
+                            } else if rect_contains(app.ui_areas.table, mouse.column, mouse.row) {
+                                let table = app.ui_areas.table;
+                                let inner_bottom =
+                                    table.y.saturating_add(table.height).saturating_sub(1);
+
+                                if mouse.row == app.ui_areas.table_header_row {
+                                    // Border (1) + highlight_symbol "👉 " (3) = 4
+                                    let content_start = table.x.saturating_add(4);
+                                    if mouse.column >= content_start {
+                                        let col_x = mouse.column - content_start;
+                                        // Column widths: 8, 10, 22, 12, 12 with column_spacing = 1
                                         if col_x < 9 {
-                                            app.set_sort_key(crate::app::SortKey::Number);
-                                        } else if col_x < 19 {
-                                            app.set_sort_key(crate::app::SortKey::Type);
-                                        } else if col_x < 41 {
-                                            app.set_sort_key(crate::app::SortKey::Date);
-                                        } else if col_x < 53 {
-                                            app.set_sort_key(crate::app::SortKey::User);
-                                        } else if col_x < 65 {
-                                            app.set_sort_key(crate::app::SortKey::UsedSpace);
+                                            app.set_sort_key(SortKey::Number);
+                                        } else if col_x < 20 {
+                                            app.set_sort_key(SortKey::Type);
+                                        } else if col_x < 43 {
+                                            app.set_sort_key(SortKey::Date);
+                                        } else if col_x < 56 {
+                                            app.set_sort_key(SortKey::User);
+                                        } else if col_x < 69 {
+                                            app.set_sort_key(SortKey::UsedSpace);
                                         }
-                                    } else if mouse.row >= first_data_row {
-                                        // Clicked on table body - select row
-                                        let row_offset = mouse.row.saturating_sub(first_data_row);
-                                        let target_index = row_offset as usize;
-                                        
-                                        if target_index < app.snapshots.len() {
-                                            app.table_state.select(Some(target_index));
-                                            fetch_status_async(app);
-                                        }
+                                    }
+                                } else if mouse.row >= app.ui_areas.table_first_data_row
+                                    && mouse.row < inner_bottom
+                                {
+                                    let row_offset =
+                                        (mouse.row - app.ui_areas.table_first_data_row) as usize;
+                                    let target_index = app.table_state.offset() + row_offset;
+                                    if target_index < app.get_filtered_snapshots().len() {
+                                        app.select_row(target_index);
+                                        spawn_status_fetch(app, false);
                                     }
                                 }
                             }
@@ -467,7 +517,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                 _ => {}
             }
         }
-        
+
         // Tick animations
         app.on_tick();
     }

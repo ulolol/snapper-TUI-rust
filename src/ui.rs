@@ -1,14 +1,13 @@
-use crate::app::App;
+use crate::app::{format_size, ActionButton, App, SortKey};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, BorderType, Cell, Paragraph, Row, Table, Wrap, Clear},
+    widgets::{Block, Borders, BorderType, Cell, Clear, Paragraph, Row, Table, Wrap},
     Frame,
 };
-use tachyonfx::{
-    fx, Duration, EffectRenderer, Interpolation,
-};
+use std::time::Instant;
+use tachyonfx::{fx, Duration, EffectRenderer, Interpolation, Shader};
 
 // Modern Color Palette (GitHub Dark / Dracula inspired)
 // Modern Color Palette (Cyberpunk / Dracula inspired)
@@ -28,8 +27,9 @@ const SLANT_LEFT: &str = "";
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     // Splash Screen - simple custom implementation
-    if app.show_splash {
-        if let Some(start) = app.splash_start {
+    if app.show_splash
+        && let Some(start) = app.splash_start
+    {
             if start.elapsed().as_secs() >= 2 {
                 app.show_splash = false;
             } else {
@@ -80,26 +80,21 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 f.render_widget(para, center);
                 return;
             }
-        }
     }
 
     // Initialize effect if not present
-    if app.fx.is_none() {
+    if app.fx.is_none() && app.fx_last_tick.is_none() && !app.show_splash {
         let effect = fx::fade_from(
             ratatui::style::Color::Black,
             ratatui::style::Color::Black,
-            (Duration::from_millis(1000), Interpolation::Linear),
+            (Duration::from_millis(800), Interpolation::Linear),
         );
         app.fx = Some(effect);
-        app.fx_start = Some(std::time::Instant::now());
+        app.fx_last_tick = Some(Instant::now());
     }
 
-    // Always draw main UI if we have data or if we are just loading initially but want structure
-    // Actually, if snapshots are empty and loading, we might want just the loading screen.
-    // But for operations, we want overlay.
-    
     if !app.snapshots.is_empty() || !app.loading {
-         // Create a "floating" layout with gaps
+        // Create a "floating" layout with gaps
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -112,9 +107,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Constraint::Length(1), // Bottom Gap
             ])
             .split(f.area());
-        let header_area = chunks[1];
-        draw_header(f, app, header_area);
-        
+
         // Add horizontal padding
         let main_layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -124,26 +117,28 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Constraint::Length(2), // Right Gap
             ])
             .split(f.area());
-        
+
         // Intersect vertical chunks with horizontal padding
-        // We'll pass the specific areas to the draw functions
-        
-        // Helper to intersect rects (simple version for this layout)
         let header_area = intersection(chunks[1], main_layout[1]);
         let main_area = intersection(chunks[3], main_layout[1]);
         let footer_area = intersection(chunks[5], main_layout[1]);
 
         draw_header(f, app, header_area);
         draw_main(f, app, main_area);
-        draw_actions_bar(f, footer_area);
+        draw_actions_bar(f, app, footer_area);
     }
 
-
-
-    // Render TachyonFX effects
+    // Render TachyonFX effects using frame delta time and clear once complete
     if let Some(effect) = &mut app.fx {
-        if let Some(start) = app.fx_start {
-            f.render_effect(effect, f.area(), start.elapsed().into());
+        let now = Instant::now();
+        let delta = app
+            .fx_last_tick
+            .map(|prev| now.duration_since(prev))
+            .unwrap_or_default();
+        app.fx_last_tick = Some(now);
+        f.render_effect(effect, f.area(), delta.into());
+        if effect.done() {
+            app.fx = None;
         }
     }
 
@@ -434,8 +429,10 @@ fn draw_right_panel(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
-    use crate::app::{format_size, SortKey};
-    
+    app.ui_areas.table = area;
+    app.ui_areas.table_header_row = area.y.saturating_add(1);
+    app.ui_areas.table_first_data_row = area.y.saturating_add(2);
+
     // Modern header with primary color and sort indicators
     let header_cells = vec![
         Cell::from(format!("📸 #{}", app.get_sort_indicator(SortKey::Number)))
@@ -455,25 +452,38 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         .style(Style::default().bg(PALETTE_PRIMARY))
         .height(1);
 
+    let mut table_state = std::mem::take(&mut app.table_state);
     let snapshots = app.get_filtered_snapshots();
-    
+
     // Zebra striping with modern colors
-    let rows: Vec<Row> = snapshots.iter().enumerate().map(|(idx, item)| {
-        let is_selected = app.selected_indices.contains(&idx);
-        let selection_marker = if is_selected { "✅ " } else { "" };
-        
-        let cells = vec![
-            Cell::from(format!("{}{}", selection_marker, item.number)),
-            Cell::from(item.snapshot_type.clone()),
-            Cell::from(item.date.clone()),
-            Cell::from(item.user.clone()),
-            Cell::from(item.used_space.map(|s| format_size(s)).unwrap_or_default()),
-            Cell::from(item.description.clone()),
-        ];
-        // Zebra striping
-        let bg = if idx % 2 == 0 { PALETTE_BG_DARK } else { PALETTE_BG_LIGHTER };
-        Row::new(cells).height(1).style(Style::default().bg(bg).fg(PALETTE_FG))
-    }).collect();
+    let rows: Vec<Row> = snapshots
+        .iter()
+        .enumerate()
+        .map(|(idx, item)| {
+            let is_selected = app
+                .selected_keys
+                .iter()
+                .any(|(cfg, num)| *num == item.number && cfg == &item.config);
+            let selection_marker = if is_selected { "✅ " } else { "" };
+
+            let cells = vec![
+                Cell::from(format!("{}{}", selection_marker, item.number)),
+                Cell::from(item.snapshot_type.as_str()),
+                Cell::from(item.date.as_str()),
+                Cell::from(item.user.as_str()),
+                Cell::from(item.used_space.map(format_size).unwrap_or_default()),
+                Cell::from(item.description.as_str()),
+            ];
+            let bg = if idx % 2 == 0 {
+                PALETTE_BG_DARK
+            } else {
+                PALETTE_BG_LIGHTER
+            };
+            Row::new(cells)
+                .height(1)
+                .style(Style::default().bg(bg).fg(PALETTE_FG))
+        })
+        .collect();
 
     let t = Table::new(
         rows,
@@ -502,10 +512,12 @@ fn draw_snapshot_table(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(Style::default().bg(PALETTE_ACCENT).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD))
         .highlight_symbol("👉 ");
 
-    f.render_stateful_widget(t, area, &mut app.table_state);
+    f.render_stateful_widget(t, area, &mut table_state);
+    app.table_state = table_state;
 }
 
 fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    app.ui_areas.details = area;
     let selected = app.get_selected_snapshot();
 
     let content = if let Some(snap) = selected {
@@ -515,6 +527,11 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .collect::<Vec<_>>()
                 .join(", ")
         }).unwrap_or_default();
+
+        let used_space_str = snap
+            .used_space
+            .map(|s| format!("{} ({} B)", format_size(s), s))
+            .unwrap_or_else(|| String::from("-"));
 
         vec![
             Line::from(vec![
@@ -551,7 +568,7 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
             ]),
             Line::from(vec![
                 Span::styled("💾 Used Space: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
-                Span::styled(snap.used_space.map(|s| s.to_string()).unwrap_or_default(), Style::default().fg(PALETTE_FG)),
+                Span::styled(used_space_str, Style::default().fg(PALETTE_FG)),
             ]),
             Line::from(vec![
                 Span::styled("📋 Userdata: ", Style::default().fg(PALETTE_ACCENT).add_modifier(Modifier::BOLD)),
@@ -561,6 +578,10 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
     } else {
         vec![Line::from(Span::styled("No snapshot selected.", Style::default().fg(PALETTE_GRAY).add_modifier(Modifier::ITALIC)))]
     };
+
+    let inner_height = area.height.saturating_sub(2);
+    let max_scroll = (content.len() as u16).saturating_sub(inner_height);
+    let scroll_y = app.details_scroll.min(max_scroll);
 
     let para = Paragraph::new(content)
         .block(
@@ -576,12 +597,15 @@ fn draw_details_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
-        .scroll((app.details_scroll as u16, 0));
+        .scroll((scroll_y, 0));
 
     f.render_widget(para, area);
+    app.ui_areas.details_max_scroll = max_scroll;
+    app.details_scroll = scroll_y;
 }
 
 fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    app.ui_areas.status = area;
     let mut title = String::from(" ℹ️ STATUS ");
     if app.loading {
         title.push_str(&format!(" {}", app.spinner_frames[app.spinner_state]));
@@ -591,9 +615,15 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
         Line::from(Span::styled(&app.message, Style::default().fg(if app.loading { PALETTE_WARNING } else { PALETTE_SUCCESS }))),
         Line::from(""),
     ];
-    
+
     for line in app.status_text.lines() {
         lines.push(Line::from(Span::styled(line, Style::default().fg(PALETTE_FG))));
+    }
+
+    let inner_height = area.height.saturating_sub(2);
+    app.ui_areas.status_max_scroll = (lines.len() as u16).saturating_sub(inner_height);
+    if app.status_scroll > app.ui_areas.status_max_scroll {
+        app.status_scroll = app.ui_areas.status_max_scroll;
     }
 
     let status = Paragraph::new(lines)
@@ -610,58 +640,75 @@ fn draw_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
                 .style(Style::default().bg(PALETTE_BG_DARK))
         )
         .wrap(Wrap { trim: true })
-        .scroll((app.status_scroll as u16, 0));
+        .scroll((app.status_scroll, 0));
     f.render_widget(status, area);
 }
 
-fn draw_actions_bar(f: &mut Frame, area: Rect) {
-    let actions_text = vec![
-        Span::styled(" ⚡ ACTIONS: ", Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD)),
-        
-        // Create
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_ACCENT).bg(PALETTE_BG_DARK)),
-        Span::styled(" [C]reate ➕ ", Style::default().bg(PALETTE_ACCENT).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ACCENT)),
-        Span::raw(" "),
+fn draw_actions_bar(f: &mut Frame, app: &mut App, area: Rect) {
+    let prefix = Span::styled(
+        " ⚡ ACTIONS: ",
+        Style::default().fg(PALETTE_PRIMARY).add_modifier(Modifier::BOLD),
+    );
 
-        // Delete
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_ERROR).bg(PALETTE_BG_DARK)),
-        Span::styled(" [D]elete 🗑️  ", Style::default().bg(PALETTE_ERROR).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_ERROR)),
-        Span::raw(" "),
-
-        // Apply
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_SUCCESS).bg(PALETTE_BG_DARK)),
-        Span::styled(" [A]pply ↩️  ", Style::default().bg(PALETTE_SUCCESS).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SUCCESS)),
-        Span::raw(" "),
-
-        // Filter
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_PRIMARY).bg(PALETTE_BG_DARK)),
-        Span::styled(" [/] Filter 🔍 ", Style::default().bg(PALETTE_PRIMARY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_PRIMARY)),
-        Span::raw(" "),
-
-        // Status
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_SECONDARY).bg(PALETTE_BG_DARK)),
-        Span::styled(" [S]tatus ℹ️  ", Style::default().bg(PALETTE_SECONDARY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_SECONDARY)),
-        Span::raw(" "),
-
-        // Refresh
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_WARNING).bg(PALETTE_BG_DARK)),
-        Span::styled(" [R]efresh 🔄 ", Style::default().bg(PALETTE_WARNING).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_WARNING)),
-        Span::raw(" "),
-
-        // Quit
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_GRAY).bg(PALETTE_BG_DARK)),
-        Span::styled(" [Q]uit 🚪 ", Style::default().bg(PALETTE_GRAY).fg(PALETTE_BG_DARK).add_modifier(Modifier::BOLD)),
-        Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(PALETTE_GRAY)),
+    let buttons: [(&str, Color, ActionButton); 7] = [
+        (" [C]reate ➕ ", PALETTE_ACCENT, ActionButton::Create),
+        (" [D]elete 🗑️  ", PALETTE_ERROR, ActionButton::Delete),
+        (" [A]pply ↩️  ", PALETTE_SUCCESS, ActionButton::Apply),
+        (" [/] Filter 🔍 ", PALETTE_PRIMARY, ActionButton::Filter),
+        (" [S]tatus ℹ️  ", PALETTE_SECONDARY, ActionButton::Status),
+        (" [R]efresh 🔄 ", PALETTE_WARNING, ActionButton::Refresh),
+        (" [Q]uit 🚪 ", PALETTE_GRAY, ActionButton::Quit),
     ];
-    
-    let actions = Paragraph::new(Line::from(actions_text))
+
+    let mut actions_text = vec![prefix.clone()];
+    let mut button_widths: Vec<(u16, ActionButton)> = Vec::with_capacity(buttons.len());
+
+    for (label, color, action) in buttons {
+        let s1 = Span::styled(SLANT_LEFT, Style::default().fg(color).bg(PALETTE_BG_DARK));
+        let s2 = Span::styled(
+            label,
+            Style::default()
+                .bg(color)
+                .fg(PALETTE_BG_DARK)
+                .add_modifier(Modifier::BOLD),
+        );
+        let s3 = Span::styled(SLANT_LEFT, Style::default().fg(PALETTE_BG_DARK).bg(color));
+        let btn_width = (s1.width() + s2.width() + s3.width()) as u16;
+        button_widths.push((btn_width, action));
+        actions_text.push(s1);
+        actions_text.push(s2);
+        actions_text.push(s3);
+        actions_text.push(Span::raw(" "));
+    }
+
+    let line = Line::from(actions_text);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(PALETTE_GRAY))
+        .style(Style::default().bg(PALETTE_BG_DARK));
+    let inner = block.inner(area);
+
+    // Record exact hit-test rects matching Alignment::Center
+    app.ui_areas.footer_buttons.clear();
+    let total_width = line.width() as u16;
+    let mut cursor_x = inner.x.saturating_add(inner.width.saturating_sub(total_width) / 2);
+    cursor_x = cursor_x.saturating_add(prefix.width() as u16);
+    for (btn_width, action) in button_widths {
+        app.ui_areas.footer_buttons.push((
+            Rect {
+                x: cursor_x,
+                y: inner.y,
+                width: btn_width,
+                height: inner.height,
+            },
+            action,
+        ));
+        cursor_x = cursor_x.saturating_add(btn_width + 1); // +1 for trailing space
+    }
+
+    let actions = Paragraph::new(line)
         .alignment(Alignment::Center)
-        .block(Block::default().borders(Borders::ALL).border_type(BorderType::Double).border_style(Style::default().fg(PALETTE_GRAY)).style(Style::default().bg(PALETTE_BG_DARK)));
+        .block(block);
     f.render_widget(actions, area);
 }
