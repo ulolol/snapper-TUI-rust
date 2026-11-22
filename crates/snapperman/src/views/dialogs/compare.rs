@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
@@ -12,7 +13,8 @@ use gpui_kit::{
 use snapper_core::model::Snapshot;
 
 use crate::state::WorkspaceModel;
-use crate::views::dialogs::ChoiceItem;
+use crate::views::aether;
+use crate::views::dialogs::{ChoiceItem, dialog_header_banner};
 
 fn build_snapshot_choices(snapshots: &[Snapshot], config: &str) -> Vec<ChoiceItem> {
     let mut list: Vec<&Snapshot> = snapshots.iter().filter(|s| s.config == config).collect();
@@ -125,12 +127,13 @@ pub fn open_compare_dialog(
             .child(
                 v_flex()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Inspect file changes and diffs between any two snapshots in the same configuration (use #0 for the current live filesystem)."),
-                    )
+                    .child(dialog_header_banner(
+                        LucideIconName::GitCompareArrows,
+                        cx.theme().info,
+                        "Select Snapshot Comparison Range",
+                        "Inspect file changes and diffs between any two snapshots in the same configuration (#0 is the live filesystem).",
+                        cx,
+                    ))
                     .child(
                         v_form()
                             .child(field().label("Configuration").child(Select::new(&config_select)))
@@ -151,6 +154,7 @@ pub fn open_compare_dialog(
                     .gap_2()
                     .child(
                         Button::new("compare-cancel")
+                            .rounded(aether::pill_radius())
                             .label("Cancel")
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
@@ -159,6 +163,7 @@ pub fn open_compare_dialog(
                     .child(
                         Button::new("dialog-compare-submit")
                             .primary()
+                            .rounded(aether::pill_radius())
                             .label("Compare")
                             .on_click(move |_, window, cx| {
                                 let Some(config) = cfg_sel.read(cx).selected_value().cloned() else {

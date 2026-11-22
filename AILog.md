@@ -1,5 +1,161 @@
 # AI Development Log (`AILog.md`)
 
+## 2026-11-22 — Release `v0.7.3`: Workspace Version Bump, Full CI Parity Checks & Tag Push
+
+### Steps & Verification (`task-736`)
+- **Version Bump**: Updated `[workspace.package]` version from `0.5.0` to `0.7.3` in `Cargo.toml` (inherited by `snapper-core`, `snapper-tui`, and `snapperman`) and refreshed `Cargo.lock`.
+- **Full Local Verification (CI Parity)**:
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings`: 0 warnings (`1.39s`).
+  - `cargo test -p snapper-core -p snapper-tui`: `17 passed; 0 failed` (`13` `snapper-core` + `4` `snapper-tui`).
+  - `cargo clippy -p snapper-core --features dbus --all-targets -- -D warnings`: 0 warnings (`0.71s`).
+  - `cargo test -p snapper-core --features dbus`: `16 passed; 0 failed`.
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: 0 warnings (`2.45s`).
+  - `cargo test -p snapperman`: `15 passed; 0 failed` (`5` unit + `10` `tests/ui.rs` integration tests).
+
+## 2026-11-22 — `snapperman` Pass 6: Inline Sidebar Count Pills (`aether::count_pill`) & Bounds Test
+
+### Findings
+- **Root Cause of Clipped Sidebar Count Badges**: `gpui_kit::component::badge::Badge` (`gpui-component-0.10.0/src/badge.rs`) is an absolute notification overlay designed to wrap a child icon, painting with `top(-3px)` and negative `inset_e(-3px * count.len(), cx)`. When used childless inside `SidebarMenuItem::suffix` (`crates/snapperman/src/views/sidebar.rs`), its `0x0` wrapper sits flush against `SidebarMenuItem`'s `.overflow_x_hidden()` flex container (`gpui-component-0.10.0/src/sidebar/menu.rs`), pushing the right side of the badge outside the clip edge and shifting it off-center. The same childless `Badge` was also used in `crates/snapperman/src/views/analytics.rs`.
+
+### Steps & Fixes
+- **`crates/snapperman/src/views/aether.rs`**: Added `pub fn count_pill(id, count, max, active, cx) -> AnyElement` returning a normal-flow `.flex_shrink_0()` pill with `h(px(18.))`, `min_w(px(22.))`, `px_1p5()`, `rounded_full()`, mono `11px` font, `.test_support()`, and theme-adaptive contrast (no `absolute()` or negative edge offsets).
+- **`crates/snapperman/src/views/sidebar.rs`**: Replaced `Badge::new().count(...)` suffixes on `"All Configs"` and each per-config item with `aether::count_pill(...)` (`sidebar-config-all-count`, `sidebar-config-<name>-count`) and added `.py_1().px_2()` item padding on `SidebarMenuItem`.
+- **`crates/snapperman/src/views/analytics.rs`**: Replaced the childless `Badge::new().count(top_rows.len())` with `aether::count_pill("analytics-top-count", top_rows.len(), 999, false, cx)`.
+- **`crates/snapperman/tests/ui.rs`**: Added `#[gpui_kit::test]` async regression test `sidebar_count_pills_fit_inside_expanded_rows` asserting each expanded config row's count pill has explicit size (`>= 22x16`) and sits strictly inside the row's bounds (`pill.right() <= row.right() - px(4.)`, `pill.top() >= row.top()`, `pill.bottom() <= row.bottom()`).
+
+### Verification & Deploy
+- **macOS (`task-691`)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: 0 warnings (`0.89s`).
+  - `cargo test -p snapperman`: `15 passed; 0 failed` (`5` unit tests + `10` `tests/ui.rs` tests including `sidebar_count_pills_fit_inside_expanded_rows`).
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings` (`0.19s`) & `cargo test -p snapper-core -p snapper-tui`: `17 passed; 0 failed` (`13` `snapper-core` + `4` `snapper-tui`).
+  - `git status --short crates/snapper-core crates/snapper-tui`: clean (no modifications).
+- **Linux (`kaos@ka0sboxnvme.local`, `task-695`)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: 0 warnings (`0.67s`).
+  - `cargo test -p snapperman`: `15 passed; 0 failed` (`5` unit tests + `10` `tests/ui.rs` tests, `3.38s`).
+  - `cargo build -p snapperman --release`: built in `40.69s`, stripped and installed to `/home/kaos/.local/bin/snapperman` (`49M` ELF x86-64 PIE binary, `LDD_CLEAN`, `HELP_OK`).
+
+## 2026-11-22 — `snapperman` Pass 4 & Pass 5: Translucent Single-Pane Flow, Border Removal, Lucide Icon Fix (`AllAssets`), and Linux Redeploy
+
+### Findings
+- **Root Cause of Missing Circular Medallion Icons**: `crates/snapperman/src/main.rs` registered `.with_assets(gpui_kit::assets::Assets)`, which only embeds ~95 icons from `default-icons.txt` and omits `Gauge`, `Layers`, `Flame`, `Clock`, `FileDiff`, `ShieldCheck`, `ShieldAlert`, `KeyRound`, `Lock`, `LockOpen`, `SlidersHorizontal`, `Compass`, `GitCompareArrows`, `Archive`, `Pin`, `PinOff`, `RotateCcw`, `Sparkles`, `Zap`, `Activity`, `FolderTree`, and `X`. Switching to `gpui_kit::assets::AllAssets` bundles the full 1,830-icon Lucide SVG catalog.
+- **Opacity & Borderless Single-Pane Layout**: High-opacity panel/table fills (especially on light presets `Aether Parchment` and `System Light`) obscured the embedded 6-theme WebP backgrounds, while panel inset gaps and 1px section/row/button borders fragmented the canvas into visible boxes.
+
+### Steps & Fixes
+- **`crates/snapperman/src/main.rs`**: Registered `.with_assets(gpui_kit::assets::AllAssets)`.
+- **`crates/snapperman/src/theme.rs`**: Lowered `ThemeAccents` glass opacities across dark/light presets (`backdrop_scrim`: `0.08`/`0.03`, `chrome_bg`: `0.36`/`0.30`, `surface_sidebar`: `0.40`/`0.34`, `surface_panel`: `0.46`/`0.40`, `surface_card`: `0.44`/`0.38`, `surface_diff`: `0.62`/`0.58`, `sunken_bg`: `0.24`/`0.22`, `header_tint`: `0.26`/`0.24`), configured translucent `table.*` tokens (`0.45`/`0.40` body, `0.50`/`0.47` head/foot, `0.09` stripe, `0.48`/`0.45` hover), aligned `SystemDark`/`SystemLight` radii to `10`/`16`, and set `border`, `sidebar_border`, `table_row_border`, `title_bar_border`, and `status_bar_border` to `transparent_black()`.
+- **`crates/snapperman/assets/themes/aetherpunk-suite.json` & `cyberpunk-dracula.json`**: Updated radii (`radius: 10`, `radius.lg: 16`), set `border`, `sidebar.border`, `table.row.border`, `title_bar.border`, and `status_bar.border` to `#00000000`, softened `input.border`, and applied translucent `table.*` (`#0E192A73`, `#130F2173`, `#FAF6EE66`, `#15162273`) and `button.secondary.*` fills.
+- **`crates/snapperman/src/views/aether.rs` & Views (`shell`, `sidebar`, `toolbar`, `table`, `inspector`, `diff_pane`, `analytics`, `settings`, `command_palette`, `dialogs/{mod,auth,create,modify,compare,confirm}`)**:
+  - Removed inset margins/gaps between Sidebar, Toolbar, Table, and Inspector and removed `.border_1()`/`.border_t_1()`/shadows across panels, cards, medallions, Settings rows, dirty banner, and batch bar.
+  - Switched `.outline()` Tags to `.border_0()`, `.outline()` secondary buttons to `.secondary()`, and added frosted `analytics-header-card` and `settings-header-card`.
+  - Added `all_snapperman_lucide_icons_load_from_all_assets` unit test validating all 35 `LucideIconName` variants against `AllAssets`.
+
+### Verification & Deploy
+- **macOS**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: 0 warnings (`1.00s`).
+  - `cargo test -p snapperman`: `14 passed; 0 failed` (5 unit tests + 9 `tests/ui.rs` integration tests).
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings`: 0 warnings (`0.18s`); `cargo test -p snapper-core -p snapper-tui`: `17 passed; 0 failed` (`13` `snapper-core` + `4` `snapper-tui`).
+  - Python source scan on `crates/snapperman/src/**`: `ZERO EMOJIS VERIFIED`.
+- **Linux (`kaos@ka0sboxnvme.local`)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: 0 warnings (`0.69s`).
+  - `cargo test -p snapperman`: `14 passed; 0 failed` (5 unit tests + 9 `tests/ui.rs` tests, `3.06s`).
+  - `cargo build -p snapperman --release`: built in `38.23s`, stripped and installed to `/home/kaos/.local/bin/snapperman` (`49M` ELF x86-64 binary, `LDD_CLEAN`, `HELP_OK`).
+
+## 2026-11-22 — `snapperman` Pass 3: Theme-Matched Abstract Sculptural Landscape Backgrounds
+
+### Findings
+- Added bespoke abstract solid-object / landscape artwork for each of the 6 `AppThemePreset` themes while preserving strict WCAG AA/AAA text & UI legibility through atmospheric scrims and frosted translucent panel/table surfaces.
+- Verified `gpui-pre` enables `image` with `webp`, `jpeg`, and `png` decoders, and `gpui_kit::img(Arc<Image>)` with `ObjectFit::Cover` decodes embedded `ImageFormat::Webp` assets cleanly inside both runtime windows and headless `#[gpui_kit::test]` runners.
+- Identified that `DataTable` paints `cx.theme().tokens.table`, so making `table.background` frosted while keeping `snapshot-table-container` transparent during `DataTable` rendering avoids double-stacking opacity; additionally, `ThemeTokens::reconcile` syncs `theme.colors.*` updates automatically onto `theme.tokens.*` for `SystemDark`/`SystemLight` presets.
+
+### Steps
+1. Generated 6 custom 16:9 minimalist 3D sculptural / landscape wallpapers via `image-generator` (matching Aetherpunk Citadel obsidian/brass/aether, Arcanepunk Enclave obsidian-violet/amethyst/emerald, Aether Parchment sunlit travertine/ivory/brass, Cyberpunk Dracula nocturnal indigo/violet/cyan, System Dark charcoal basalt dunes, and System Light high-key porcelain/alabaster), visually inspected all 6 with zero text/artifacts, and encoded them to compact `1600x900` `.webp` files in `crates/snapperman/assets/backgrounds/` (`12K`–`36K` each, ~`153 KB` combined).
+2. Embedded all 6 WebP assets via `include_bytes!` and `OnceLock<Arc<Image>>` in `crates/snapperman/src/theme.rs` (`theme_background_image(preset)`), extended `ThemeAccents` with `backdrop_scrim`, `chrome_bg`, `surface_panel`, `surface_sidebar`, `surface_card`, and `surface_diff`, tuned translucent table tokens in `aetherpunk-suite.json` & `cyberpunk-dracula.json` (plus `10/16` radius in `cyberpunk-dracula.json`), and harmonized `SystemDark` / `SystemLight` radii, rim borders, and frosted tables inside `apply_theme_preset`.
+3. Added `aether::theme_backdrop(preset, cx)` and wired it into `SnapperShell` behind frosted `TitleBar` / `StatusBar`, floating translucent `Sidebar`, `Toolbar`, `DataTable`, `Inspector`, `DiffPane`, `AnalyticsView` (with frosted `analytics-header-card`), and `SettingsView` (with frosted `settings-header-card`) so every theme switch updates the artwork cleanly while keeping every label, icon, chart, and diff line sharp and legible.
+4. Added unit test `theme_background_images_are_valid_webp_and_distinct` validating RIFF/WEBP headers and unique hashes across all 6 presets.
+5. Updated `README.md`, `AILog.md`, and `walkthrough.md`.
+
+### Progress & Verification
+- **Emoji/Pictograph Audit (`crates/snapperman/src/**`)**: **0 hits** (`ZERO EMOJIS VERIFIED`).
+- **macOS (local, separate GUI & TUI invocations)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors**.
+  - `cargo test -p snapperman`: **13 passed, 0 failed** (`4` unit + `9` `#[gpui_kit::test]` headless UI tests exercising all 6 theme switches).
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings` & `cargo test -p snapper-core -p snapper-tui`: **17 passed, 0 failed** (`13` `snapper-core` + `4` `snapper-tui`).
+- **Garuda Linux (`kaos@ka0sboxnvme.local`)**:
+  - Synced workspace to `~/snapperman-test/`.
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors** (`0.78s`).
+  - `cargo test -p snapperman`: **13 passed, 0 failed** (`4` unit + `9` `#[gpui_kit::test]` UI tests).
+  - `cargo build -p snapperman --release` (`40.58s`): installed stripped x86-64 ELF binary (`48M`) to `/home/kaos/.local/bin/snapperman`; verified `ldd` clean (`LDD_CLEAN`) and `--help` exits cleanly (`HELP_OK`).
+
+---
+
+## 2026-11-22 — `snapperman` Pass 2: Soft Organic Aetherpunk & Floating Rounded Overhaul
+
+### Findings
+- User feedback on the Pass 1 Linux install identified the layout as overly boxy (caused by `radius: 3`, `radius.lg: 5`, opaque 1px borders across nested cards/grids/toolbars, angular 90° `corner_bracket_overlay`, octagonal/diamond `brand_sigil`, rigid top 2px bars on `plaque_card`, and edge-to-edge docked panes divided by 1px steel lines).
+- Online & design-system research synthesized a **Soft Organic Aetherpunk / Celestial Art Nouveau** direction combining:
+  - **Concentric radius math** (`16px` outer floating panels/cards → `10px` nested controls/inputs/tiles → `9999px` pill tags, filter chips, tabs, and action buttons).
+  - **Tonal surface elevation & two-layer ambient shadows** over a deeper recessed outer canvas (`#070D17` Citadel / `#090711` Enclave / `#EAE2D2` Parchment) so floating panels read via lift and whisper-translucent (`8–14%` alpha) rims rather than opaque box walls.
+  - **GPUI curved vector primitives** (`PathBuilder::arc_to` & `cubic_bezier_to`) plus `gpui-kit` pill variants (`TabBar::pill()`, `Tag::rounded_full()`, `DescriptionList::bordered(false)`, `ButtonRounded::Size(px(9999.))`, custom `ResizeHandleRenderer`).
+
+### Steps
+1. Updated `crates/snapperman/assets/themes/aetherpunk-suite.json` across **Aetherpunk Citadel**, **Arcanepunk Enclave**, and **Aether Parchment** to `radius: 10` / `radius.lg: 16`, deep recessed canvas grounds, three-tier elevated surfaces, whisper-translucent rim borders, and WCAG 1.4.11 ≥3:1 `input.border` tokens.
+2. Extended `ThemeAccents` in `crates/snapperman/src/theme.rs` with `header_tint`, `orb_halo`, `subtle_border`, `shadow_primary`, and `shadow_ambient`, and updated theme unit test assertions for `10`/`16` radii.
+3. Rebuilt `crates/snapperman/src/views/aether.rs`:
+   - Removed `corner_bracket_overlay`, `plaque_card`, `filigree_rule`, and `empty_state_plaque`.
+   - Added circular orbital astrolabe `brand_sigil` (`arc_to` rings + core orb), sinuous cubic-Bézier `filigree_wave` with centered pearl orb, `floating_panel`, `soft_card`, circular `icon_medallion`, `pill_radius()`, two-layer `panel_shadows`/`card_shadows`, transparent gutter `soft_resize_handle()`, `status_dot()`, pill `space_micro_bar`, pill `Skeleton` loaders, and `empty_state_card`.
+4. Overhauled all `snapperman` views (`shell.rs`, `sidebar.rs`, `toolbar.rs`, `table.rs`, `inspector.rs`, `diff_pane.rs`, `analytics.rs`, `settings.rs`, and `dialogs/{mod,auth,create,modify,compare,confirm}.rs`) around inset `16px`-rounded floating panels, borderless tonal `telemetry_cell`s & `.bordered(false)` `DescriptionList`, `.pill()` Inspector tabs, full-pill filter/diff-mode tracks, and pill buttons while preserving all headless UI test `ElementId`s and keeping `0` emojis.
+5. Updated `README.md`, `AILog.md`, and `walkthrough.md`.
+
+### Issues & Fixes
+- Fixed `PathBuilder::cubic_bezier_to` endpoint argument type (`point(x, y)` instead of scalar `Pixels`) and removed unused `v_flex` import in `toolbar.rs` during initial compile check.
+- Wrapped remote SSH deploy command under `bash -c '...'` because `kaos@ka0sboxnvme.local`'s default login shell is `fish`, avoiding POSIX `if ... then ... fi` syntax failure.
+
+### Progress & Verification
+- **Emoji/Pictograph Audit (`crates/snapperman/src/**`)**: **0 hits** (`ZERO EMOJIS VERIFIED`).
+- **macOS (local, separate GUI & TUI invocations)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors**.
+  - `cargo test -p snapperman`: **12 passed, 0 failed** (`3` unit + `9` `#[gpui_kit::test]` UI tests).
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings` & `cargo test -p snapper-core -p snapper-tui`: **17 passed, 0 failed** (`13` `snapper-core` + `4` `snapper-tui`).
+- **Garuda Linux (`kaos@ka0sboxnvme.local`)**:
+  - Synced workspace to `~/snapperman-test/`.
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors** (`0.77s`).
+  - `cargo test -p snapperman`: **12 passed, 0 failed** (`3` unit + `9` `#[gpui_kit::test]` UI tests).
+  - `cargo build -p snapperman --release` (`37.62s`): installed stripped x86-64 ELF binary (`48M`) to `/home/kaos/.local/bin/snapperman`; verified `ldd` clean and `--help` exits cleanly.
+
+---
+
+## 2026-11-22 — `snapperman` Aetherpunk & Arcanepunk UI/UX Redesign
+
+### Findings
+- Researched **Aetherpunk / Arcanepunk** aesthetics (Hextech / Piltover Art-Deco precision, Kaladesh / Avishkar, Eberron) and audited every `snapperman` view and theme token against `gpui-component 0.10.0`.
+- Discovered 5 silently ignored JSON theme keys in `crates/snapperman/assets/themes/cyberpunk-dracula.json` (`description_list_label.*`, `drag_border`, `link.*`, `progress_bar.background`, `slider.bar.background`) that did not match `ThemeConfigColors` serde field names (`description_list.label.*`, `drag.border`, `link` / `link.active` / `link.hover`, `progress.bar.background`, `slider.background`).
+- Verified all color pairings in the three new themes (**Aetherpunk Citadel**, **Arcanepunk Enclave**, **Aether Parchment**) meet WCAG 2.2 AA/AAA contrast (`15.4:1`, `16.5:1`, `14.1:1` primary ink-on-ground; `7.2:1`, `6.7:1`, `5.2:1` muted-on-surface).
+- Identified UX gaps across `snapperman`: duplicate `"snapperman"` header chrome in `TitleBar` and `SidebarHeader`, missing keyboard shortcut hints (`Kbd`), flat toolbar filter/action hierarchy, lack of storage magnitude signals in table & analytics rows, missing discard control + key descriptions in `SettingsView`, unseparated destructive vs. safe actions in `InspectorView`, and plain-text loading/empty states.
+- Verified at `960px` minimum window width with expanded `255px` sidebar that `ToolbarView` and `InspectorView` headers need `.flex_wrap()` to avoid squeezing or clipping controls.
+
+### Steps
+1. Created `crates/snapperman/assets/themes/aetherpunk-suite.json` defining **Aetherpunk Citadel** (new default), **Arcanepunk Enclave**, and **Aether Parchment** (`radius: 3`, `radius.lg: 5`, native `linear-gradient(...)` specular brass/amethyst/chrome tokens, and bespoke `highlight` diff/syntax palettes).
+2. Fixed all 5 schema key names in `crates/snapperman/assets/themes/cyberpunk-dracula.json` and preserved it as a switchable preset.
+3. Updated `crates/snapperman/src/theme.rs` & `crates/snapperman/src/state/prefs.rs` with 6-preset `AppThemePreset`, `ThemeAccents` helper (theme-adaptive, zero hardcoded hex in views), and unit tests validating gradient and repaired schema token application.
+4. Built `crates/snapperman/src/views/aether.rs` with GPUI `canvas`/`PathBuilder` vector chrome (`brand_sigil`, `filigree_rule`, `corner_bracket_overlay`, `plaque_card`, `space_micro_bar`, `shortcut_kbd`, `Skeleton` loaders, `empty_state_plaque`).
+5. Redesigned all `snapperman` views (`shell.rs`, `sidebar.rs`, `toolbar.rs`, `table.rs`, `inspector.rs`, `diff_pane.rs`, `analytics.rs`, `settings.rs`, `command_palette.rs`, and `dialogs/{mod,auth,create,modify,compare,confirm}.rs`) using themed `gpui_kit::assets::IconName` vector icons everywhere with zero emojis.
+6. Updated `crates/snapperman/tests/ui.rs` for the new default theme, 6-theme cycling, zero-match filter recovery (`table-clear-filters`), and staged settings discard (`settings-discard`).
+7. Updated `README.md`.
+
+### Progress & Verification
+- **Icon & Emoji Audit**: Verified `0` emoji/pictograph codepoints across `crates/snapperman/src/**` (all UI chrome, badges, buttons, tabs, empty states, and dialogs use themed `gpui_kit::assets::IconName` / `IconName` or GPUI vector `PathBuilder` paths).
+- **macOS (local, separate TUI & GUI invocations)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors**.
+  - `cargo test -p snapperman`: **12 passed, 0 failed** (`3` theme/preset unit tests + `9` `#[gpui_kit::test]` headless UI tests).
+  - `cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings` & `cargo test -p snapper-core -p snapper-tui`: **17 passed, 0 failed** (`13` `snapper-core` + `4` `snapper-tui`).
+  - `cargo run -p snapperman -- --help`: clean exit 0.
+- **Garuda Linux (`kaos@ka0sboxnvme.local`)**:
+  - `cargo clippy -p snapperman --all-targets -- -D warnings`: **0 warnings/errors**.
+  - `cargo test -p snapperman`: **12 passed, 0 failed** (`3` unit + `9` `#[gpui_kit::test]` UI tests).
+  - `cargo build -p snapperman --release` (`47.50s`): installed stripped x86-64 ELF binary (`48M`) to `/home/kaos/.local/bin/snapperman`; verified all shared libraries resolved via `ldd`; verified `/home/kaos/.local/bin/snapperman --help` exits cleanly; confirmed `/home/kaos/.local/share/applications/snapperman.desktop` present and no stale `prefs.json` forcing the old theme.
+
+---
+
 ## 2026-11-22 — Release v0.5.0 & Separate TUI/GUI Build Pipeline
 
 ### Findings

@@ -92,7 +92,7 @@ fn main() {
     let prefs = AppPrefs::load();
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(gpui_kit::assets::AllAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::init_themes(cx, prefs.theme);

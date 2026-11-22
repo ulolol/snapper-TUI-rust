@@ -4,22 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::theme::AppThemePreset;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct AppPrefs {
     pub theme: AppThemePreset,
     pub sidebar_collapsed: bool,
     pub split_diff: bool,
-}
-
-impl Default for AppPrefs {
-    fn default() -> Self {
-        Self {
-            theme: AppThemePreset::CyberpunkDracula,
-            sidebar_collapsed: false,
-            split_diff: false,
-        }
-    }
 }
 
 impl AppPrefs {

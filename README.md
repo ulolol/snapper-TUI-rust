@@ -7,7 +7,7 @@
 
 A Rust workspace for managing **Snapper** Btrfs/LVM snapshots with two native frontends powered by a shared core engine:
 
-- **`snapperman`** — GPU‑accelerated desktop GUI built on **GPUI** and **`gpui-kit`**, defaulting to a custom **Cyberpunk Dracula** theme (with one‑click switching to **System Dark** and **System Light**).
+- **`snapperman`** — GPU‑accelerated desktop GUI built on **GPUI** and **`gpui-kit`**, featuring a **Soft Organic Aetherpunk / Arcanepunk Theme Suite** (**Aetherpunk Citadel** default, **Arcanepunk Enclave**, **Aether Parchment** light), floating rounded inset workspace panels, pill controls, preserved **Cyberpunk Dracula**, and **System Dark / Light** presets.
 - **`snapper-TUI-rust`** — Fast, lightweight terminal user interface built on **Ratatui** with zero GUI dependencies.
 - **`snapper-core`** — Shared backend (`org.opensuse.Snapper` D‑Bus + CLI/`pkexec` + deterministic `--mock`), typed models, tolerant parsers, filtering/sorting, file trees, and analytics.
 
@@ -18,11 +18,11 @@ A Rust workspace for managing **Snapper** Btrfs/LVM snapshots with two native fr
 ## ✨ Features
 
 ### Desktop GUI (`snapperman`)
-- **🎨 Cyberpunk Dracula + System Themes** — Signature **Cyberpunk Dracula** palette (`#13141f` base, `#bd93f9` purple, `#8be9fd` cyan, `#ff79c6` magenta, `#50fa7b` green) plus instant **System Dark** and **System Light** switching (`Cmd/Ctrl+T`).
-- **🗂️ Multi‑Config Sidebar & Virtualized Table** — Browse `All Configs` or filter per config (`root`, `home`, `var-log`, etc.) with snapshot count badges, two‑phase `used-space` hydration (`--disable-used-space` first, background space pass second), multi‑select checkboxes, sortable columns, and row context menus.
-- **🔬 File‑Change Tree & Native Diff Viewer** — Hierarchical folder/file tree with `A` / `M` / `D` / `Attr` badges, path filtering, Unified & Side‑by‑Side Split modes, `syntect` syntax highlighting, binary detection, 2 MiB truncation protection, arbitrary `A..B` / `N..0` comparison picker, and selective path restoration (`undochange`).
-- **🛠️ Full Snapshot Lifecycle** — Create (`single`, `pre`, paired `post` snapshots, cleanup policy, `important=yes`, userdata), modify metadata/cleanup/pin state, delete with protected `#0`/`active`/`default` guards, and roll back with confirmation alerts.
-- **📊 Storage Analytics & Config Manager** — KPI summary cards, per‑snapshot and per‑config `BarChart` visualizations, click‑to‑inspect heaviest snapshots, and grouped `get-config` / `set-config` retention editing + cleanup execution (`number`, `timeline`, `empty-pre-post`).
+- **Soft Organic Aetherpunk / Arcanepunk Single-Pane UI & Theme Backdrops** — Seamless, borderless frosted workspace (`Sidebar`, `Toolbar`, `DataTable`, `Inspector`, `Analytics`, `Settings`) with transparent section/row/table borders and edge-to-edge layout flow layered over **6 bespoke, embedded abstract sculptural landscape backgrounds** (one matched per theme, switching live with `Cmd/Ctrl+T` or the Command Palette). Low-opacity frosted surfaces and atmospheric scrims keep backgrounds visible across both light (**Aether Parchment**, **System Light**) and dark (**Aetherpunk Citadel**, **Arcanepunk Enclave**, **Cyberpunk Dracula**, **System Dark**) presets while preserving crisp legibility. Features concentric `10px / 16px / pill` geometry, borderless pill resize handles, circular orbital astrolabe crest & S-wave filigree dividers, and **100% themed vector icons** via `gpui-kit`'s full `AllAssets` Lucide catalog (zero emojis in UI chrome).
+- **🗂️ Floating Multi‑Config Vault Sidebar & Virtualized Table** — Tonal vault summary pill, `All Configs` or per‑config filtering (`root`, `home`, `var-log`, etc.) with snapshot count badges, two‑phase `used-space` hydration, pill-rounded storage micro-bars, multi‑select checkboxes with floating pill batch actions, sortable columns, actionable empty states with one-click filter reset, and row context menus.
+- **🔬 Floating Specimen Inspector, File‑Change Tree & Native Diff Viewer** — Pill tabs (`Overview` / `Changes`), glowing circular status orb, borderless 2×2 tonal telemetry tiles (`Used Space`, `Retention Policy`, `Type / Pair Jump`, `File Delta`), borderless `DescriptionList`, risk-separated pill actions, blast-radius (`+A / ~M / -D / Attr`) diff summary pills, Unified & Split modes inside a sunken pill toggle track, `syntect` syntax highlighting, binary detection, 2 MiB truncation protection, arbitrary `A..B` / `N..0` comparison picker, and selective path restoration (`undochange`).
+- **🛠️ Full Snapshot Lifecycle** — Create (`single`, `pre`, paired `post` snapshots, cleanup policy, `important=yes`, userdata), modify metadata/cleanup/pin state, delete with protected `#0`/`active`/`default` guards, and roll back with confirmation alerts across soft pill-actioned dialogs.
+- **📊 Storage Analytics & Config Manager** — Soft floating KPI cards with circular icon medallions, per‑snapshot and per‑config `BarChart` visualizations, storage share bars with click‑to‑inspect navigation, and grouped `get-config` / `set-config` retention editing with human-readable key descriptions + staged **Discard / Save** banner and pill cleanup execution (`number`, `timeline`, `empty-pre-post`).
 - **⌨️ Command Palette** — Instant `Cmd/Ctrl+K` fuzzy command palette for actions, views, configs, and themes.
 - **🐧 Native Linux D‑Bus + Session Auth & CLI Fallback** — Connects directly to `org.opensuse.Snapper` via `zbus` on Linux, tries passwordless `sudo -n`, and presents a built‑in **Administrator Authentication** dialog (`sudo -S` single-prompt session with zeroed memory + non-hanging `pkexec --disable-internal-agent` option) so it works even on minimal window managers without a running Polkit agent.
 
@@ -42,7 +42,9 @@ snapper-tui-rust/
 │   ├── snapper-core/              # Shared library: models, parsers, queries, CLI/D-Bus/Mock backends
 │   ├── snapper-tui/               # Binary: `snapper-TUI-rust` (Ratatui TUI, no GPUI deps)
 │   └── snapperman/                # Binary: `snapperman` (GPUI + gpui-kit desktop GUI)
-│       ├── assets/themes/         # Embedded `cyberpunk-dracula.json` ThemeSet
+│       ├── assets/
+│       │   ├── backgrounds/       # Embedded 1600x900 WebP abstract landscape backdrops (6 presets)
+│       │   └── themes/            # Embedded `aetherpunk-suite.json` & `cyberpunk-dracula.json` ThemeSets
 │       └── tests/ui.rs            # Headless GPUI UI integration tests (`#[gpui_kit::test]`)
 └── .github/workflows/rust.yml     # CI tests, Clippy, and dual-binary release builds
 ```
@@ -162,7 +164,7 @@ We recommend **unprivileged GUI execution** rather than running the full GUI pro
 | `Cmd/Ctrl + R` / `F5` | Refresh Snapshots & Configs |
 | `Cmd/Ctrl + B` | Toggle Sidebar |
 | `Cmd/Ctrl + I` | Toggle Inspector |
-| `Cmd/Ctrl + T` | Cycle Theme (Cyberpunk Dracula → System Dark → System Light) |
+| `Cmd/Ctrl + T` | Cycle Theme (Citadel → Enclave → Parchment → Cyberpunk → Dark → Light) |
 | `Cmd/Ctrl + 1` / `2` / `3` | Switch View (Snapshots / Analytics / Config & Retention) |
 
 ### `snapper-TUI-rust` (TUI)

@@ -1,3 +1,4 @@
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::clipboard::Clipboard;
@@ -18,6 +19,8 @@ use snapper_core::format::format_size;
 use snapper_core::model::SnapshotKey;
 
 use crate::state::{InspectorTab, WorkspaceEvent, WorkspaceModel};
+use crate::theme::ThemeAccents;
+use crate::views::aether;
 use crate::views::dialogs::compare::open_compare_dialog;
 use crate::views::dialogs::confirm::{open_delete_confirm_dialog, open_rollback_confirm_dialog};
 use crate::views::dialogs::modify::open_modify_snapshot_dialog;
@@ -60,38 +63,51 @@ impl InspectorView {
     }
 }
 
-impl Render for InspectorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let ws = self.workspace.read(cx);
-        let Some(snap) = ws.selected_snapshot().cloned() else {
-            return v_flex()
-                .id("inspector-empty")
-                .size_full()
-                .min_w_0()
-                .min_h_0()
+fn telemetry_cell(
+    icon: LucideIconName,
+    icon_color: gpui_kit::Hsla,
+    label: &'static str,
+    value_el: impl IntoElement,
+    cx: &gpui_kit::App,
+) -> impl IntoElement {
+    let accents = ThemeAccents::from_theme(cx.theme());
+    v_flex()
+        .flex_1()
+        .min_w(px(140.))
+        .p_3()
+        .gap_1p5()
+        .rounded(px(12.))
+        .bg(accents.sunken_bg)
+        .child(
+            h_flex()
+                .gap_1p5()
                 .items_center()
-                .justify_center()
-                .gap_2()
-                .p_6()
-                .bg(cx.theme().background)
-                .child(
-                    Icon::new(IconName::Inspector)
-                        .size_10()
-                        .text_color(cx.theme().muted_foreground),
-                )
-                .child(
-                    div()
-                        .text_sm()
-                        .font_semibold()
-                        .text_color(cx.theme().foreground)
-                        .child("No snapshot selected"),
-                )
+                .child(aether::icon_medallion(icon, icon_color, 22.))
                 .child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child("Select a snapshot from the table to inspect details or browse file diffs."),
-                )
+                        .child(label),
+                ),
+        )
+        .child(value_el)
+}
+
+impl Render for InspectorView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let accents = ThemeAccents::from_theme(cx.theme());
+        let ws = self.workspace.read(cx);
+        let Some(snap) = ws.selected_snapshot().cloned() else {
+            return aether::floating_panel("inspector-empty", accents.surface_panel, cx)
+                .child(aether::empty_state_card(
+                    "inspector-empty-plaque",
+                    LucideIconName::Compass,
+                    cx.theme().primary,
+                    "No snapshot selected",
+                    "Select a snapshot from the table to inspect telemetry, retention tags, or browse file diffs.",
+                    None,
+                    cx,
+                ))
                 .into_any_element();
         };
 
@@ -112,6 +128,24 @@ impl Render for InspectorView {
             "Changes".into()
         };
 
+        let rail_color = if snap.active {
+            cx.theme().success
+        } else if snap.number == 0 || snap.default {
+            cx.theme().info
+        } else {
+            cx.theme().primary
+        };
+
+        let desc_preview = if snap.description.is_empty() {
+            if is_zero {
+                "Live filesystem subvolume".to_string()
+            } else {
+                "No snapshot description".to_string()
+            }
+        } else {
+            snap.description.clone()
+        };
+
         let ws_tab = self.workspace.clone();
         let ws_pin = self.workspace.clone();
         let ws_mod = self.workspace.clone();
@@ -124,53 +158,94 @@ impl Render for InspectorView {
         let snap_rb = snap.clone();
         let snap_del = snap.clone();
 
-        v_flex()
-            .id("inspector-panel")
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .bg(cx.theme().background)
+        aether::floating_panel("inspector-panel", accents.surface_panel, cx)
             .child(
                 v_flex()
                     .w_full()
-                    .p_3()
+                    .px_3p5()
+                    .pt_3()
+                    .pb_2p5()
                     .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
+                    .bg(accents.header_tint)
                     .child(
                         h_flex()
                             .w_full()
+                            .flex_wrap()
                             .justify_between()
                             .items_center()
                             .gap_2()
                             .child(
                                 h_flex()
-                                    .gap_2()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex_wrap()
+                                    .gap_1p5()
                                     .items_center()
+                                    .child(
+                                        div()
+                                            .size(px(10.))
+                                            .rounded_full()
+                                            .bg(rail_color.opacity(0.24))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(div().size(px(6.)).rounded_full().bg(rail_color)),
+                                    )
                                     .child(
                                         div()
                                             .font_family(cx.theme().mono_font_family.clone())
                                             .text_base()
-                                            .font_semibold()
-                                            .text_color(cx.theme().foreground)
-                                            .child(format!("#{} ({})", key.number, key.config)),
+                                            .font_bold()
+                                            .text_color(rail_color)
+                                            .child(format!("#{}", key.number)),
+                                    )
+                                    .child(
+                                        Tag::secondary()
+                                            .xsmall()
+                                            .rounded_full()
+                                            .border_0()
+                                            .child(key.config.clone()),
                                     )
                                     .when(snap.active, |this| {
-                                        this.child(Tag::success().xsmall().outline().child("active"))
+                                        this.child(
+                                            Tag::success()
+                                                .xsmall()
+                                                .rounded_full()
+                                                .border_0()
+                                                .child("active"),
+                                        )
                                     })
                                     .when(snap.default, |this| {
-                                        this.child(Tag::info().xsmall().outline().child("default"))
+                                        this.child(
+                                            Tag::info()
+                                                .xsmall()
+                                                .rounded_full()
+                                                .border_0()
+                                                .child("default"),
+                                        )
                                     })
                                     .when(is_pinned, |this| {
-                                        this.child(Tag::warning().xsmall().outline().child("pinned"))
+                                        this.child(
+                                            Tag::warning()
+                                                .xsmall()
+                                                .rounded_full()
+                                                .border_0()
+                                                .child("pinned"),
+                                        )
                                     })
                                     .when(snap.is_important(), |this| {
-                                        this.child(Tag::primary().xsmall().outline().child("important"))
+                                        this.child(
+                                            Tag::primary()
+                                                .xsmall()
+                                                .rounded_full()
+                                                .border_0()
+                                                .child("important"),
+                                        )
                                     }),
                             )
                             .child(
                                 TabBar::new("inspector-tabs")
-                                    .segmented()
+                                    .pill()
                                     .small()
                                     .selected_index(match active_tab {
                                         InspectorTab::Overview => 0,
@@ -190,113 +265,143 @@ impl Render for InspectorView {
                                     })
                                     .child(
                                         Tab::new().child(
-                                            div()
+                                            h_flex()
                                                 .id("inspector-tab-overview")
                                                 .test_support()
+                                                .gap_1()
+                                                .items_center()
+                                                .child(Icon::new(LucideIconName::Layers).xsmall())
                                                 .child("Overview"),
                                         ),
                                     )
                                     .child(
                                         Tab::new().child(
-                                            div()
+                                            h_flex()
                                                 .id("inspector-tab-changes")
                                                 .test_support()
+                                                .gap_1()
+                                                .items_center()
+                                                .child(Icon::new(LucideIconName::FileDiff).xsmall())
                                                 .child(changes_label),
                                         ),
                                     ),
                             ),
                     )
                     .child(
+                        div()
+                            .w_full()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(desc_preview),
+                    )
+                    .child(
                         h_flex()
                             .w_full()
                             .flex_wrap()
-                            .gap_1()
+                            .justify_between()
+                            .gap_1p5()
                             .items_center()
                             .child(
-                                Button::new("inspector-pin")
-                                    .xsmall()
-                                    .outline()
-                                    .icon(if is_pinned {
-                                        IconName::StarOff
-                                    } else {
-                                        IconName::Star
-                                    })
-                                    .label(if is_pinned { "Unpin" } else { "Pin" })
-                                    .on_click(move |_, _, cx| {
-                                        ws_pin.update(cx, |ws, cx| ws.toggle_pin_selected(cx));
-                                    }),
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("inspector-pin")
+                                            .xsmall()
+                                            .secondary()
+                                            .rounded(aether::pill_radius())
+                                            .icon(if is_pinned {
+                                                Icon::new(LucideIconName::PinOff)
+                                            } else {
+                                                Icon::new(LucideIconName::Pin)
+                                            })
+                                            .label(if is_pinned { "Unpin" } else { "Pin" })
+                                            .on_click(move |_, _, cx| {
+                                                ws_pin.update(cx, |ws, cx| ws.toggle_pin_selected(cx));
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("inspector-modify")
+                                            .xsmall()
+                                            .secondary()
+                                            .rounded(aether::pill_radius())
+                                            .icon(IconName::Settings2)
+                                            .label("Modify…")
+                                            .on_click(move |_, window, cx| {
+                                                open_modify_snapshot_dialog(
+                                                    ws_mod.clone(),
+                                                    snap_mod.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("inspector-compare")
+                                            .xsmall()
+                                            .secondary()
+                                            .rounded(aether::pill_radius())
+                                            .icon(Icon::new(LucideIconName::GitCompareArrows))
+                                            .label("Compare…")
+                                            .on_click(move |_, window, cx| {
+                                                open_compare_dialog(
+                                                    ws_cmp.clone(),
+                                                    Some((snap_cmp.config.clone(), snap_cmp.number, 0)),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                    ),
                             )
                             .child(
-                                Button::new("inspector-modify")
-                                    .xsmall()
-                                    .outline()
-                                    .icon(IconName::Settings2)
-                                    .label("Modify…")
-                                    .on_click(move |_, window, cx| {
-                                        open_modify_snapshot_dialog(
-                                            ws_mod.clone(),
-                                            snap_mod.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                            )
-                            .child(
-                                Button::new("inspector-compare")
-                                    .xsmall()
-                                    .outline()
-                                    .icon(IconName::Replace)
-                                    .label("Compare…")
-                                    .on_click(move |_, window, cx| {
-                                        open_compare_dialog(
-                                            ws_cmp.clone(),
-                                            Some((snap_cmp.config.clone(), snap_cmp.number, 0)),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                            )
-                            .child(
-                                Button::new("inspector-rollback")
-                                    .xsmall()
-                                    .outline()
-                                    .icon(IconName::Undo2)
-                                    .label("Rollback…")
-                                    .disabled(is_zero)
-                                    .tooltip(if is_zero {
-                                        "Snapshot #0 is already the live filesystem"
-                                    } else {
-                                        "Roll back default subvolume to this snapshot"
-                                    })
-                                    .on_click(move |_, window, cx| {
-                                        open_rollback_confirm_dialog(
-                                            ws_rb.clone(),
-                                            snap_rb.clone(),
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                            )
-                            .child(
-                                Button::new("inspector-delete")
-                                    .xsmall()
-                                    .danger()
-                                    .icon(IconName::Delete)
-                                    .label("Delete…")
-                                    .disabled(is_protected)
-                                    .tooltip(if is_protected {
-                                        "Snapshot #0, active, and default snapshots are protected"
-                                    } else {
-                                        "Delete this snapshot"
-                                    })
-                                    .on_click(move |_, window, cx| {
-                                        open_delete_confirm_dialog(
-                                            ws_del.clone(),
-                                            vec![snap_del.clone()],
-                                            window,
-                                            cx,
-                                        );
-                                    }),
+                                h_flex()
+                                    .gap_1p5()
+                                    .items_center()
+                                    .child(
+                                        Button::new("inspector-rollback")
+                                            .xsmall()
+                                            .warning()
+                                            .rounded(aether::pill_radius())
+                                            .icon(Icon::new(LucideIconName::RotateCcw))
+                                            .label("Rollback…")
+                                            .disabled(is_zero)
+                                            .tooltip(if is_zero {
+                                                "Snapshot #0 is already the live filesystem"
+                                            } else {
+                                                "Roll back default subvolume to this snapshot"
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                open_rollback_confirm_dialog(
+                                                    ws_rb.clone(),
+                                                    snap_rb.clone(),
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("inspector-delete")
+                                            .xsmall()
+                                            .danger()
+                                            .rounded(aether::pill_radius())
+                                            .icon(IconName::Delete)
+                                            .label("Delete…")
+                                            .disabled(is_protected)
+                                            .tooltip(if is_protected {
+                                                "Snapshot #0, active, and default snapshots are protected"
+                                            } else {
+                                                "Delete this snapshot"
+                                            })
+                                            .on_click(move |_, window, cx| {
+                                                open_delete_confirm_dialog(
+                                                    ws_del.clone(),
+                                                    vec![snap_del.clone()],
+                                                    window,
+                                                    cx,
+                                                );
+                                            }),
+                                    ),
                             ),
                     ),
             )
@@ -314,6 +419,10 @@ impl Render for InspectorView {
                         None if hydrating_space => "Calculating…".to_string(),
                         None => "Unavailable".to_string(),
                     };
+                    let retention_text = snap
+                        .cleanup
+                        .clone()
+                        .unwrap_or_else(|| "pinned (manual)".to_string());
                     let subvol_value = snap.subvolume.clone();
                     let type_elem = {
                         let ws_pair = self.workspace.clone();
@@ -321,13 +430,15 @@ impl Render for InspectorView {
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().child(snap.snapshot_type.clone()))
+                            .child(div().text_xs().font_semibold().child(snap.snapshot_type.clone()))
                             .when_some(pair_num, |this, n| {
                                 this.child(
                                     Button::new("inspector-jump-pair")
                                         .xsmall()
-                                        .outline()
-                                        .label(format!("Jump to #{n}"))
+                                        .secondary()
+                                        .rounded(aether::pill_radius())
+                                        .icon(Icon::new(LucideIconName::GitCompareArrows))
+                                        .label(format!("#{n}"))
                                         .on_click(move |_, _, cx| {
                                             ws_pair.update(cx, |ws, cx| {
                                                 ws.select_key(
@@ -362,12 +473,21 @@ impl Render for InspectorView {
                         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                         .unwrap_or_default();
 
+                    let ws_inspect_diff = self.workspace.clone();
+                    let changes_summary: SharedString = if status_loading {
+                        "Scanning…".into()
+                    } else if file_count > 0 {
+                        format!("{file_count} changed").into()
+                    } else {
+                        "Click Inspect".into()
+                    };
+
                     div()
                         .id("inspector-overview-scroll")
                         .flex_1()
                         .min_h_0()
                         .w_full()
-                        .p_3()
+                        .p_3p5()
                         .overflow_y_scrollbar()
                         .child(
                             v_flex()
@@ -383,76 +503,164 @@ impl Render for InspectorView {
                                                     "inspector-protected-alert",
                                                     "Protected snapshot (#0 / active / default): deletion is disabled to keep the live system consistent.",
                                                 )
+                                                .icon(Icon::new(LucideIconName::ShieldCheck))
                                                 .small(),
                                             ),
                                     )
                                 })
                                 .child(
-                                    DescriptionList::horizontal()
-                                        .columns(1)
-                                        .small()
-                                        .label_width(px(110.))
+                                    v_flex()
+                                        .w_full()
+                                        .gap_2()
                                         .child(
-                                            DescriptionItem::new("Number")
-                                                .value(format!("#{}", snap.number)),
+                                            h_flex()
+                                                .w_full()
+                                                .gap_2()
+                                                .child(telemetry_cell(
+                                                    LucideIconName::HardDrive,
+                                                    cx.theme().info,
+                                                    "Used Space",
+                                                    div()
+                                                        .font_family(cx.theme().mono_font_family.clone())
+                                                        .text_sm()
+                                                        .font_bold()
+                                                        .text_color(cx.theme().foreground)
+                                                        .child(space_text.clone()),
+                                                    cx,
+                                                ))
+                                                .child(telemetry_cell(
+                                                    LucideIconName::Clock,
+                                                    cx.theme().primary,
+                                                    "Retention Policy",
+                                                    div()
+                                                        .font_family(cx.theme().mono_font_family.clone())
+                                                        .text_sm()
+                                                        .font_semibold()
+                                                        .text_color(cx.theme().foreground)
+                                                        .child(retention_text),
+                                                    cx,
+                                                )),
                                         )
                                         .child(
-                                            DescriptionItem::new("Config")
-                                                .value(snap.config.clone()),
-                                        )
+                                            h_flex()
+                                                .w_full()
+                                                .gap_2()
+                                                .child(telemetry_cell(
+                                                    LucideIconName::Layers,
+                                                    cx.theme().warning,
+                                                    "Snapshot Type",
+                                                    type_elem,
+                                                    cx,
+                                                ))
+                                                .child(telemetry_cell(
+                                                    LucideIconName::FileDiff,
+                                                    cx.theme().success,
+                                                    "File Delta",
+                                                    h_flex()
+                                                        .w_full()
+                                                        .justify_between()
+                                                        .items_center()
+                                                        .gap_1()
+                                                        .child(
+                                                            div()
+                                                                .text_xs()
+                                                                .font_semibold()
+                                                                .text_color(cx.theme().foreground)
+                                                                .child(changes_summary),
+                                                        )
+                                                        .child(
+                                                            Button::new("inspector-quick-changes")
+                                                                .xsmall()
+                                                                .secondary()
+                                                                .rounded(aether::pill_radius())
+                                                                .icon(Icon::new(LucideIconName::ArrowRight))
+                                                                .label("Diffs")
+                                                                .on_click(move |_, _, cx| {
+                                                                    ws_inspect_diff.update(cx, |ws, cx| {
+                                                                        ws.set_inspector_tab(
+                                                                            InspectorTab::Changes,
+                                                                            cx,
+                                                                        );
+                                                                    });
+                                                                }),
+                                                        ),
+                                                    cx,
+                                                )),
+                                        ),
+                                )
+                                .child(aether::filigree_wave(cx))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .p_3()
+                                        .rounded(px(12.))
+                                        .bg(accents.sunken_bg)
                                         .child(
-                                            DescriptionItem::new("Type").value(type_elem),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("Created")
-                                                .value(snap.date.clone()),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("User")
-                                                .value(snap.user.clone()),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("Subvolume")
-                                                .value(subvol_elem),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("Cleanup").value(
-                                                snap.cleanup
-                                                    .clone()
-                                                    .unwrap_or_else(|| "none".to_string()),
-                                            ),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("Used Space")
-                                                .value(space_text),
-                                        )
-                                        .child(
-                                            DescriptionItem::new("Description").value(
-                                                if snap.description.is_empty() {
-                                                    "—".to_string()
-                                                } else {
-                                                    snap.description.clone()
-                                                },
-                                            ),
+                                            DescriptionList::horizontal()
+                                                .bordered(false)
+                                                .columns(1)
+                                                .small()
+                                                .label_width(px(110.))
+                                                .child(
+                                                    DescriptionItem::new("Number")
+                                                        .value(format!("#{}", snap.number)),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Config")
+                                                        .value(snap.config.clone()),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Created")
+                                                        .value(snap.date.clone()),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("User")
+                                                        .value(snap.user.clone()),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Subvolume")
+                                                        .value(subvol_elem),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Cleanup").value(
+                                                        snap.cleanup
+                                                            .clone()
+                                                            .unwrap_or_else(|| "none".to_string()),
+                                                    ),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Used Space")
+                                                        .value(space_text),
+                                                )
+                                                .child(
+                                                    DescriptionItem::new("Description").value(
+                                                        if snap.description.is_empty() {
+                                                            "—".to_string()
+                                                        } else {
+                                                            snap.description.clone()
+                                                        },
+                                                    ),
+                                                ),
                                         ),
                                 )
                                 .when(!userdata_entries.is_empty(), |this| {
                                     this.child(
                                         v_flex()
-                                            .gap_1()
+                                            .gap_1p5()
                                             .child(
                                                 div()
                                                     .text_xs()
                                                     .font_semibold()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .child("USERDATA"),
+                                                    .child("Userdata tags"),
                                             )
                                             .child(
-                                                h_flex().flex_wrap().gap_1().children(
+                                                h_flex().flex_wrap().gap_1p5().children(
                                                     userdata_entries.into_iter().map(|(k, v)| {
                                                         Tag::secondary()
                                                             .small()
-                                                            .outline()
+                                                            .rounded_full()
+                                                            .border_0()
                                                             .child(format!("{k}={v}"))
                                                     }),
                                                 ),

@@ -1,15 +1,20 @@
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex,
+    v_flex,
 };
 use gpui_kit::{
-    AppContext as _, Context, Entity, Focusable as _, IntoElement, ParentElement as _, Render,
-    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
+    AppContext as _, Context, Entity, Focusable as _, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
+    px,
 };
 use snapper_core::query::TypeFilter;
 
 use crate::state::{WorkspaceEvent, WorkspaceModel};
+use crate::theme::ThemeAccents;
+use crate::views::aether;
 use crate::views::dialogs::compare::open_compare_dialog;
 use crate::views::dialogs::confirm::open_delete_confirm_dialog;
 use crate::views::dialogs::create::open_create_snapshot_dialog;
@@ -50,11 +55,21 @@ impl ToolbarView {
             },
         );
 
-        let ws_sub = cx.subscribe(&workspace, |_, _, event: &WorkspaceEvent, cx| {
-            if matches!(event, WorkspaceEvent::SnapshotsChanged) {
-                cx.notify();
-            }
-        });
+        let ws_sub = cx.subscribe_in(
+            &workspace,
+            window,
+            |this, ws, event: &WorkspaceEvent, window, cx| {
+                if matches!(event, WorkspaceEvent::SnapshotsChanged) {
+                    if ws.read(cx).filter().query.is_empty()
+                        && !this.search_input.read(cx).value().is_empty()
+                    {
+                        this.search_input
+                            .update(cx, |st, cx| st.set_value("", window, cx));
+                    }
+                    cx.notify();
+                }
+            },
+        );
 
         Self {
             workspace,
@@ -77,6 +92,8 @@ impl Render for ToolbarView {
         let ws = self.workspace.read(cx);
         let active_type = ws.filter().type_filter;
         let active_config = ws.filter().config.clone();
+        let has_query = !ws.filter().query.trim().is_empty();
+        let has_active_filter = has_query || active_type != TypeFilter::All;
         let checked_count = ws.checked_keys().len();
         let checked_pair = ws.same_config_checked_pair();
         let loading = ws.loading_snapshots();
@@ -84,28 +101,33 @@ impl Render for ToolbarView {
         let ws_new = self.workspace.clone();
         let ws_refresh = self.workspace.clone();
         let ws_compare = self.workspace.clone();
+        let ws_reset = self.workspace.clone();
+        let search_for_reset = self.search_input.clone();
+
+        let accents = ThemeAccents::from_theme(cx.theme());
 
         v_flex()
+            .id("toolbar-card")
             .w_full()
-            .bg(cx.theme().background)
-            .border_b_1()
-            .border_color(cx.theme().border)
+            .bg(accents.surface_panel)
             .child(
                 h_flex()
                     .w_full()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
+                    .px_3p5()
+                    .py_2p5()
+                    .gap_2p5()
+                    .flex_wrap()
                     .items_center()
                     .justify_between()
                     .child(
                         h_flex()
                             .flex_1()
-                            .min_w_0()
+                            .min_w(px(320.))
                             .gap_2()
+                            .flex_wrap()
                             .items_center()
                             .child(
-                                div().w(px(280.)).min_w(px(160.)).child(
+                                div().flex_1().min_w(px(150.)).max_w(px(250.)).child(
                                     Input::new(&self.search_input)
                                         .id("toolbar-search-input")
                                         .small()
@@ -114,26 +136,58 @@ impl Render for ToolbarView {
                                             Icon::new(IconName::Search)
                                                 .small()
                                                 .text_color(cx.theme().muted_foreground),
-                                        ),
+                                        )
+                                        .when(!has_query, |this| {
+                                            this.suffix(aether::shortcut_kbd("cmd-f", "ctrl-f", cx))
+                                        }),
                                 ),
                             )
                             .child(
-                                h_flex().gap_1().items_center().children(
-                                    TypeFilter::all_variants().iter().copied().map(|variant| {
+                                h_flex()
+                                    .p(px(3.))
+                                    .gap(px(2.))
+                                    .items_center()
+                                    .rounded_full()
+                                    .bg(accents.sunken_bg)
+                                    .children(TypeFilter::all_variants().iter().copied().map(|variant| {
                                         let is_active = active_type == variant;
                                         let ws_f = self.workspace.clone();
                                         let btn = Button::new(type_filter_id(variant))
-                                            .small()
+                                            .xsmall()
+                                            .rounded(aether::pill_radius())
                                             .label(variant.label())
                                             .on_click(move |_, _, cx| {
                                                 ws_f.update(cx, |ws, cx| {
                                                     ws.set_type_filter(variant, cx);
                                                 });
                                             });
-                                        if is_active { btn.primary() } else { btn.outline() }
-                                    }),
-                                ),
-                            ),
+                                        if is_active {
+                                            btn.secondary()
+                                        } else {
+                                            btn.ghost()
+                                        }
+                                    })),
+                            )
+                            .when(has_active_filter, |this| {
+                                this.child(
+                                    Button::new("toolbar-reset-filters")
+                                        .xsmall()
+                                        .ghost()
+                                        .rounded(aether::pill_radius())
+                                        .icon(Icon::new(LucideIconName::X))
+                                        .label("Reset")
+                                        .tooltip("Clear search query and type filter")
+                                        .on_click(move |_, window, cx| {
+                                            search_for_reset.update(cx, |st, cx| {
+                                                st.set_value("", window, cx);
+                                            });
+                                            ws_reset.update(cx, |ws, cx| {
+                                                ws.set_query(String::new(), cx);
+                                                ws.set_type_filter(TypeFilter::All, cx);
+                                            });
+                                        }),
+                                )
+                            }),
                     )
                     .child(
                         h_flex()
@@ -143,9 +197,11 @@ impl Render for ToolbarView {
                             .child(
                                 Button::new("toolbar-compare")
                                     .small()
-                                    .outline()
-                                    .icon(IconName::Replace)
+                                    .secondary()
+                                    .rounded(aether::pill_radius())
+                                    .icon(Icon::new(LucideIconName::GitCompareArrows))
                                     .label("Compare…")
+                                    .tooltip("Compare any two snapshots (Cmd/Ctrl+D)")
                                     .on_click(move |_, window, cx| {
                                         open_compare_dialog(ws_compare.clone(), None, window, cx);
                                     }),
@@ -154,8 +210,10 @@ impl Render for ToolbarView {
                                 Button::new("toolbar-new-snapshot")
                                     .small()
                                     .primary()
+                                    .rounded(aether::pill_radius())
                                     .icon(IconName::Plus)
                                     .label("New Snapshot…")
+                                    .tooltip("Create snapshot (Cmd/Ctrl+N)")
                                     .on_click({
                                         let cfg = active_config.clone();
                                         move |_, window, cx| {
@@ -172,6 +230,7 @@ impl Render for ToolbarView {
                                 Button::new("toolbar-refresh")
                                     .small()
                                     .ghost()
+                                    .rounded(aether::pill_radius())
                                     .icon(IconName::RefreshCw)
                                     .loading(loading)
                                     .tooltip("Refresh snapshots (Cmd/Ctrl+R / F5)")
@@ -189,20 +248,31 @@ impl Render for ToolbarView {
 
                 this.child(
                     h_flex()
-                        .w_full()
-                        .px_3()
-                        .py_1()
+                        .mx_3p5()
+                        .mb_2p5()
+                        .px_3p5()
+                        .py_1p5()
                         .gap_2()
                         .items_center()
                         .justify_between()
+                        .rounded_full()
                         .bg(cx.theme().accent)
-                        .border_t_1()
-                        .border_color(cx.theme().border)
                         .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().accent_foreground)
-                                .child(format!("{checked_count} snapshot(s) selected")),
+                            h_flex()
+                                .gap_1p5()
+                                .items_center()
+                                .child(
+                                    Icon::new(LucideIconName::Layers)
+                                        .xsmall()
+                                        .text_color(cx.theme().accent_foreground),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_semibold()
+                                        .text_color(cx.theme().accent_foreground)
+                                        .child(format!("{checked_count} snapshot(s) selected")),
+                                ),
                         )
                         .child(
                             h_flex()
@@ -211,8 +281,9 @@ impl Render for ToolbarView {
                                 .child(
                                     Button::new("toolbar-batch-compare")
                                         .xsmall()
-                                        .outline()
-                                        .icon(IconName::Replace)
+                                        .secondary()
+                                        .rounded(aether::pill_radius())
+                                        .icon(Icon::new(LucideIconName::GitCompareArrows))
                                         .label("Compare Selected")
                                         .disabled(checked_pair.is_none())
                                         .tooltip(if checked_pair.is_some() {
@@ -237,6 +308,7 @@ impl Render for ToolbarView {
                                     Button::new("toolbar-batch-delete")
                                         .xsmall()
                                         .danger()
+                                        .rounded(aether::pill_radius())
                                         .icon(IconName::Delete)
                                         .label(format!("Delete {checked_count}…"))
                                         .on_click(move |_, window, cx| {
@@ -258,6 +330,8 @@ impl Render for ToolbarView {
                                     Button::new("toolbar-batch-clear")
                                         .xsmall()
                                         .ghost()
+                                        .rounded(aether::pill_radius())
+                                        .icon(Icon::new(LucideIconName::X))
                                         .label("Clear")
                                         .on_click(move |_, _, cx| {
                                             ws_clr.update(cx, |ws, cx| ws.clear_checked(cx));

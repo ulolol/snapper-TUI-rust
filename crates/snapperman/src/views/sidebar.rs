@@ -1,4 +1,4 @@
-use gpui_kit::component::badge::Badge;
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::sidebar::{
     Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarItem, SidebarMenuItem,
@@ -8,10 +8,13 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     App, Context, ElementId, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _,
+    Styled as _, Subscription, Window, div, prelude::FluentBuilder as _, px,
 };
+use snapper_core::format::format_size;
 
 use crate::state::{ActiveView, WorkspaceEvent, WorkspaceModel};
+use crate::theme::ThemeAccents;
+use crate::views::aether;
 use crate::views::dialogs::confirm::open_cleanup_dialog;
 
 #[derive(Clone)]
@@ -97,6 +100,52 @@ impl SidebarItem for NamedSidebarMenu {
     }
 }
 
+#[derive(Clone)]
+enum SidebarSection {
+    Group(SidebarGroup<NamedSidebarMenu>),
+    FiligreeRule { collapsed: bool },
+}
+
+impl Collapsible for SidebarSection {
+    fn is_collapsed(&self) -> bool {
+        match self {
+            Self::Group(g) => g.is_collapsed(),
+            Self::FiligreeRule { collapsed } => *collapsed,
+        }
+    }
+
+    fn collapsed(self, collapsed: bool) -> Self {
+        match self {
+            Self::Group(g) => Self::Group(g.collapsed(collapsed)),
+            Self::FiligreeRule { .. } => Self::FiligreeRule { collapsed },
+        }
+    }
+}
+
+impl SidebarItem for SidebarSection {
+    fn render(
+        self,
+        id: impl Into<ElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> impl IntoElement {
+        match self {
+            Self::Group(g) => g.render(id, window, cx).into_any_element(),
+            Self::FiligreeRule { collapsed } => {
+                if collapsed {
+                    div().into_any_element()
+                } else {
+                    div()
+                        .px_3()
+                        .py_0p5()
+                        .child(aether::filigree_wave(cx))
+                        .into_any_element()
+                }
+            }
+        }
+    }
+}
+
 pub struct SidebarView {
     workspace: Entity<WorkspaceModel>,
     collapsed: bool,
@@ -137,15 +186,22 @@ impl Render for SidebarView {
         let active_view = ws.active_view();
         let total_count = ws.snapshots().len();
         let configs = ws.configs().to_vec();
+        let total_space: u64 = ws.snapshots().iter().filter_map(|s| s.used_space).sum();
+        let hydrating = ws.hydrating_space();
 
         let mut config_items = Vec::with_capacity(configs.len() + 1);
         let ws_all = self.workspace.clone();
+        let all_active = active_view == ActiveView::Snapshots && active_config.is_none();
         config_items.push(NamedSidebarMenuItem::new(
             "sidebar-config-all",
             SidebarMenuItem::new("All Configs")
+                .py_1()
+                .px_2()
                 .icon(IconName::LayoutDashboard)
-                .active(active_view == ActiveView::Snapshots && active_config.is_none())
-                .suffix(move |_, _| Badge::new().count(total_count).max(999))
+                .active(all_active)
+                .suffix(move |_, cx| {
+                    aether::count_pill("sidebar-config-all-count", total_count, 999, all_active, cx)
+                })
                 .on_click(move |_, _, cx| {
                     ws_all.update(cx, |ws, cx| {
                         ws.set_active_view(ActiveView::Snapshots, cx);
@@ -162,13 +218,18 @@ impl Render for SidebarView {
                 && active_config.as_deref() == Some(cfg.name.as_str());
             let label: SharedString = cfg.name.clone().into();
             let item_id: SharedString = format!("sidebar-config-{}", cfg.name).into();
+            let count_id: SharedString = format!("sidebar-config-{}-count", cfg.name).into();
 
             config_items.push(NamedSidebarMenuItem::new(
                 item_id,
                 SidebarMenuItem::new(label)
+                    .py_1()
+                    .px_2()
                     .icon(IconName::HardDrive)
                     .active(selected)
-                    .suffix(move |_, _| Badge::new().count(count).max(999))
+                    .suffix(move |_, cx| {
+                        aether::count_pill(count_id.clone(), count, 999, selected, cx)
+                    })
                     .on_click(move |_, _, cx| {
                         let target = cfg_name.clone();
                         ws_cfg.update(cx, |ws, cx| {
@@ -185,7 +246,7 @@ impl Render for SidebarView {
                 NamedSidebarMenuItem::new(
                     "sidebar-nav-snapshots",
                     SidebarMenuItem::new("Snapshots")
-                        .icon(IconName::GalleryVerticalEnd)
+                        .icon(Icon::new(LucideIconName::Layers))
                         .active(active_view == ActiveView::Snapshots)
                         .on_click(move |_, _, cx| {
                             ws_v.update(cx, |ws, cx| ws.set_active_view(ActiveView::Snapshots, cx));
@@ -197,7 +258,7 @@ impl Render for SidebarView {
                 NamedSidebarMenuItem::new(
                     "sidebar-nav-analytics",
                     SidebarMenuItem::new("Storage Analytics")
-                        .icon(IconName::ChartPie)
+                        .icon(Icon::new(LucideIconName::ChartPie))
                         .active(active_view == ActiveView::Analytics)
                         .on_click(move |_, _, cx| {
                             ws_v.update(cx, |ws, cx| ws.set_active_view(ActiveView::Analytics, cx));
@@ -212,7 +273,7 @@ impl Render for SidebarView {
                 NamedSidebarMenuItem::new(
                     "sidebar-nav-settings",
                     SidebarMenuItem::new("Config & Retention")
-                        .icon(IconName::Settings)
+                        .icon(Icon::new(LucideIconName::SlidersHorizontal))
                         .active(active_view == ActiveView::Settings)
                         .on_click(move |_, _, cx| {
                             let cfg = current_cfg.clone();
@@ -230,51 +291,99 @@ impl Render for SidebarView {
         let collapsed = self.collapsed;
         let ws_cleanup = self.workspace.clone();
         let cleanup_cfg = active_config.clone();
+        let cfg_count = configs.len();
+        let vault_space: SharedString = if hydrating {
+            "Calculating…".into()
+        } else {
+            format_size(total_space).into()
+        };
 
-        Sidebar::new("app-sidebar")
-            .collapsed(collapsed)
-            .header(
-                SidebarHeader::new()
-                    .when(!collapsed, |this| {
-                        this.child(
+        let accents = ThemeAccents::from_theme(cx.theme());
+
+        div()
+            .flex_shrink_0()
+            .h_full()
+            .overflow_hidden()
+            .bg(accents.surface_sidebar)
+            .child(
+                Sidebar::new("app-sidebar")
+                    .collapsed(collapsed)
+                    .border_0()
+                    .bg(cx.theme().transparent)
+                    .header(
+                        SidebarHeader::new().child(if collapsed {
                             h_flex()
-                                .gap_2()
-                                .items_center()
+                                .w_full()
+                                .justify_center()
+                                .py_1()
+                                .child(aether::brand_sigil(px(20.), cx))
+                                .into_any_element()
+                        } else {
+                            v_flex()
+                                .w_full()
+                                .gap_1p5()
+                                .px_2p5()
+                                .py_2()
+                                .rounded(cx.theme().radius)
+                                .bg(accents.sunken_bg)
                                 .child(
-                                    Icon::new(IconName::HardDrive)
-                                        .small()
-                                        .text_color(cx.theme().primary),
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(aether::brand_sigil(px(18.), cx))
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_semibold()
+                                                .text_color(cx.theme().sidebar_foreground)
+                                                .child("Snapshot Vault"),
+                                        ),
                                 )
                                 .child(
-                                    div()
-                                        .text_sm()
-                                        .font_semibold()
-                                        .text_color(cx.theme().sidebar_foreground)
-                                        .child("snapperman"),
-                                ),
-                        )
-                    }),
-            )
-            .child(SidebarGroup::new("Configs").child(NamedSidebarMenu::new(config_items)))
-            .child(SidebarGroup::new("Views").child(NamedSidebarMenu::new(view_items)))
-            .footer(
-                SidebarFooter::new().child(
-                    Button::new("sidebar-run-cleanup")
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .icon(IconName::RefreshCw)
-                        .when(!collapsed, |b| b.label("Run Cleanup…"))
-                        .tooltip("Run Snapper cleanup algorithm")
-                        .on_click(move |_, window, cx| {
-                            open_cleanup_dialog(
-                                ws_cleanup.clone(),
-                                cleanup_cfg.clone(),
-                                window,
-                                cx,
-                            );
+                                    h_flex()
+                                        .w_full()
+                                        .justify_between()
+                                        .items_center()
+                                        .text_xs()
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("{total_count} snaps · {cfg_count} cfg"))
+                                        .child(
+                                            div()
+                                                .text_color(cx.theme().sidebar_accent_foreground)
+                                                .child(vault_space),
+                                        ),
+                                )
+                                .into_any_element()
                         }),
-                ),
+                    )
+                    .child(SidebarSection::Group(
+                        SidebarGroup::new("Configs").child(NamedSidebarMenu::new(config_items)),
+                    ))
+                    .child(SidebarSection::FiligreeRule { collapsed })
+                    .child(SidebarSection::Group(
+                        SidebarGroup::new("Views").child(NamedSidebarMenu::new(view_items)),
+                    ))
+                    .footer(
+                        SidebarFooter::new().child(
+                            Button::new("sidebar-run-cleanup")
+                                .secondary()
+                                .small()
+                                .rounded(aether::pill_radius())
+                                .w_full()
+                                .icon(Icon::new(LucideIconName::Archive))
+                                .when(!collapsed, |b| b.label("Run Cleanup…"))
+                                .tooltip("Run Snapper cleanup algorithm")
+                                .on_click(move |_, window, cx| {
+                                    open_cleanup_dialog(
+                                        ws_cleanup.clone(),
+                                        cleanup_cfg.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                        ),
+                    ),
             )
     }
 }

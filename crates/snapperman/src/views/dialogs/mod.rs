@@ -6,8 +6,55 @@ pub mod modify;
 
 use std::collections::BTreeMap;
 
-use gpui_kit::SharedString;
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::select::SelectItem;
+use gpui_kit::component::{ActiveTheme as _, StyledExt as _, h_flex, v_flex};
+use gpui_kit::{App, Hsla, IntoElement, ParentElement as _, SharedString, Styled as _, div, px};
+
+use crate::views::aether;
+
+/// Shared soft Organic Aetherpunk icon-led header banner + wave separator used across modal dialogs.
+pub fn dialog_header_banner(
+    icon: LucideIconName,
+    accent: Hsla,
+    title: impl Into<SharedString>,
+    subtitle: impl Into<SharedString>,
+    cx: &App,
+) -> impl IntoElement {
+    v_flex()
+        .w_full()
+        .gap_2p5()
+        .child(
+            h_flex()
+                .w_full()
+                .gap_3()
+                .items_center()
+                .p_3p5()
+                .rounded(px(12.))
+                .bg(accent.opacity(0.10))
+                .child(aether::icon_medallion(icon, accent, 34.))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(cx.theme().foreground)
+                                .child(title.into()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(subtitle.into()),
+                        ),
+                ),
+        )
+        .child(aether::filigree_wave(cx))
+}
 
 #[derive(Clone, Debug)]
 pub struct ChoiceItem {

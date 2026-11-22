@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputState};
@@ -14,7 +15,8 @@ use gpui_kit::{
 use snapper_core::model::{CleanupAlgorithm, ModifySnapshotRequest, Snapshot};
 
 use crate::state::WorkspaceModel;
-use crate::views::dialogs::{ChoiceItem, parse_userdata_pairs};
+use crate::views::aether;
+use crate::views::dialogs::{ChoiceItem, dialog_header_banner, parse_userdata_pairs};
 
 pub fn open_modify_snapshot_dialog(
     workspace: Entity<WorkspaceModel>,
@@ -95,6 +97,13 @@ pub fn open_modify_snapshot_dialog(
             .child(
                 v_flex()
                     .gap_3()
+                    .child(dialog_header_banner(
+                        LucideIconName::Settings2,
+                        cx.theme().primary,
+                        format!("Edit Metadata for {} (#{})", key.config, key.number),
+                        "Update snapshot description, cleanup retention rule, importance flag, or userdata.",
+                        cx,
+                    ))
                     .child(
                         v_form()
                             .child(
@@ -144,6 +153,7 @@ pub fn open_modify_snapshot_dialog(
                     .gap_2()
                     .child(
                         Button::new("modify-cancel")
+                            .rounded(aether::pill_radius())
                             .label("Cancel")
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
@@ -152,6 +162,7 @@ pub fn open_modify_snapshot_dialog(
                     .child(
                         Button::new("dialog-modify-submit")
                             .primary()
+                            .rounded(aether::pill_radius())
                             .label("Save Snapshot")
                             .on_click(move |_, window, cx| {
                                 let description = Some(desc_in.read(cx).value().to_string());

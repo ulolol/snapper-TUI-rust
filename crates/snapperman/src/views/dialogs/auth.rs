@@ -8,7 +8,7 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, StyledExt as _, WindowExt as _, h_flex, v_flex,
+    ActiveTheme as _, Disableable as _, WindowExt as _, h_flex, v_flex,
 };
 use gpui_kit::{
     App, AppContext as _, Entity, Focusable as _, InteractiveElement as _, ParentElement as _,
@@ -16,6 +16,8 @@ use gpui_kit::{
 };
 
 use crate::state::WorkspaceModel;
+use crate::views::aether;
+use crate::views::dialogs::dialog_header_banner;
 
 struct DialogOpenGuard(Rc<Cell<bool>>);
 
@@ -227,39 +229,13 @@ pub fn open_auth_dialog(
             .child(
                 v_flex()
                     .gap_3()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .items_center()
-                            .p_3()
-                            .rounded_md()
-                            .bg(cx.theme().secondary)
-                            .child(
-                                Icon::new(LucideIconName::Lock)
-                                    .text_color(cx.theme().primary),
-                            )
-                            .child(
-                                v_flex()
-                                    .gap_0p5()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .font_semibold()
-                                            .text_color(cx.theme().foreground)
-                                            .child(format!(
-                                                "Unlock Snapper access for '{current_user}'"
-                                            )),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(
-                                                "Validated once via sudo and kept in memory only for this session (cleared on Lock or exit).",
-                                            ),
-                                    ),
-                            ),
-                    )
+                    .child(dialog_header_banner(
+                        LucideIconName::KeyRound,
+                        cx.theme().primary,
+                        format!("Unlock Snapper access for '{current_user}'"),
+                        "Validated once via sudo and kept in memory only for this session (cleared on Lock or exit).",
+                        cx,
+                    ))
                     .child(
                         v_form().child(
                             field().label("Password").required(true).child(
@@ -287,6 +263,7 @@ pub fn open_auth_dialog(
                     .child(
                         Button::new("dialog-auth-pkexec")
                             .ghost()
+                            .rounded(aether::pill_radius())
                             .label("Use Polkit (pkexec)")
                             .disabled(is_busy)
                             .on_click(move |_, window, cx| {
@@ -298,6 +275,7 @@ pub fn open_auth_dialog(
                             .gap_2()
                             .child(
                                 Button::new("dialog-auth-cancel")
+                                    .rounded(aether::pill_radius())
                                     .label("Cancel")
                                     .on_click(move |_, window, cx| {
                                         pw_clear.update(cx, |s, cx| s.set_value("", window, cx));
@@ -307,6 +285,7 @@ pub fn open_auth_dialog(
                             .child(
                                 Button::new("dialog-auth-submit")
                                     .primary()
+                                    .rounded(aether::pill_radius())
                                     .label(if is_busy {
                                         "Authenticating…"
                                     } else {

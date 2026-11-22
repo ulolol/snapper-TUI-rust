@@ -1,8 +1,10 @@
 use std::collections::{BTreeSet, HashMap};
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::diff::{Diff, DiffFile, DiffMode, DiffParseOptions, DiffState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::list::ListItem;
@@ -12,8 +14,7 @@ use gpui_kit::component::scroll::ScrollableElement as _;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::tree::{TreeItem, TreeState, tree};
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex,
-    v_flex,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
 };
 use gpui_kit::{
     AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
@@ -23,6 +24,8 @@ use gpui_kit::{
 use snapper_core::model::{ContentChange, FileTreeNode};
 
 use crate::state::{WorkspaceEvent, WorkspaceModel};
+use crate::theme::ThemeAccents;
+use crate::views::aether;
 use crate::views::dialogs::compare::open_compare_dialog;
 use crate::views::dialogs::confirm::open_undochange_confirm_dialog;
 
@@ -32,6 +35,35 @@ struct NodeMeta {
     change: ContentChange,
     is_leaf: bool,
     leaf_count: usize,
+}
+
+fn change_badge(change: ContentChange) -> gpui_kit::AnyElement {
+    match change {
+        ContentChange::Created => Tag::success()
+            .xsmall()
+            .rounded_full()
+            .border_0()
+            .child("A")
+            .into_any_element(),
+        ContentChange::Modified => Tag::warning()
+            .xsmall()
+            .rounded_full()
+            .border_0()
+            .child("M")
+            .into_any_element(),
+        ContentChange::Deleted => Tag::danger()
+            .xsmall()
+            .rounded_full()
+            .border_0()
+            .child("D")
+            .into_any_element(),
+        ContentChange::Unchanged => Tag::info()
+            .xsmall()
+            .rounded_full()
+            .border_0()
+            .child("Attr")
+            .into_any_element(),
+    }
 }
 
 fn collect_leaf_paths_filtered(
@@ -320,8 +352,24 @@ impl Render for DiffPaneView {
         let status_loading = ws.status_loading();
         let status_error = ws.status_error().map(ToOwned::to_owned);
         let selected_file = ws.selected_file().map(ToOwned::to_owned);
+        let selected_change = selected_file.as_deref().and_then(|path| {
+            ws.file_changes()
+                .iter()
+                .find(|c| c.path == path)
+                .map(|c| c.flags.content)
+        });
         let checked_files: BTreeSet<String> = ws.checked_files().clone();
         let total_changes = ws.file_changes().len();
+        let (mut added_cnt, mut modified_cnt, mut deleted_cnt, mut attr_cnt) = (0usize, 0, 0, 0);
+        for fc in ws.file_changes() {
+            match fc.flags.content {
+                ContentChange::Created => added_cnt += 1,
+                ContentChange::Modified => modified_cnt += 1,
+                ContentChange::Deleted => deleted_cnt += 1,
+                ContentChange::Unchanged => attr_cnt += 1,
+            }
+        }
+
         let diff_loading = ws.diff_loading();
         let diff_error = ws.diff_error().map(ToOwned::to_owned);
         let diff_is_binary = ws.diff_is_binary();
@@ -352,44 +400,91 @@ impl Render for DiffPaneView {
         let node_meta_for_ctx = self.node_meta.clone();
         let range_for_ctx = compare_range.clone();
 
+        let accents = ThemeAccents::from_theme(cx.theme());
+
         v_flex()
             .id("diff-pane")
             .size_full()
             .min_w_0()
             .min_h_0()
             .child(
-                // Top comparison controls
+                // Top comparison controls + blast-radius summary
                 h_flex()
                     .w_full()
-                    .px_3()
+                    .px_3p5()
                     .py_2()
                     .gap_2()
                     .flex_wrap()
                     .items_center()
                     .justify_between()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().tab_bar)
+                    .bg(accents.header_tint)
                     .child(
                         h_flex()
-                            .gap_2()
+                            .gap_1p5()
+                            .flex_wrap()
                             .items_center()
                             .child(match &compare_range {
                                 Some((cfg, from, to)) => Tag::info()
                                     .small()
-                                    .outline()
-                                    .child(format!("{cfg}: #{from} → #{to}"))
+                                    .rounded_full()
+                                    .border_0()
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(Icon::new(LucideIconName::GitCompareArrows).xsmall())
+                                            .child(format!("{cfg}: #{from} .. #{to}")),
+                                    )
                                     .into_any_element(),
                                 None => Tag::secondary()
                                     .small()
-                                    .outline()
+                                    .rounded_full()
+                                    .border_0()
                                     .child("No compare range")
                                     .into_any_element(),
+                            })
+                            .when(added_cnt > 0, |this| {
+                                this.child(
+                                    Tag::success()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(format!("+{added_cnt}")),
+                                )
+                            })
+                            .when(modified_cnt > 0, |this| {
+                                this.child(
+                                    Tag::warning()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(format!("~{modified_cnt}")),
+                                )
+                            })
+                            .when(deleted_cnt > 0, |this| {
+                                this.child(
+                                    Tag::danger()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(format!("-{deleted_cnt}")),
+                                )
+                            })
+                            .when(attr_cnt > 0, |this| {
+                                this.child(
+                                    Tag::info()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(format!("Attr {attr_cnt}")),
+                                )
                             })
                             .child(
                                 Button::new("diff-change-compare")
                                     .xsmall()
-                                    .outline()
+                                    .secondary()
+                                    .rounded(aether::pill_radius())
+                                    .icon(Icon::new(LucideIconName::GitCompareArrows))
                                     .label("Compare…")
                                     .on_click(move |_, window, cx| {
                                         open_compare_dialog(
@@ -405,6 +500,7 @@ impl Render for DiffPaneView {
                                     Button::new("diff-reset-compare")
                                         .xsmall()
                                         .ghost()
+                                        .rounded(aether::pill_radius())
                                         .label("Follow Selection")
                                         .on_click(move |_, _, cx| {
                                             ws_reset.update(cx, |ws, cx| ws.clear_custom_compare(cx));
@@ -414,48 +510,59 @@ impl Render for DiffPaneView {
                     )
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap_1p5()
                             .items_center()
-                            .child({
-                                let btn = Button::new("diff-mode-unified")
-                                    .xsmall()
-                                    .label("Unified")
-                                    .on_click({
-                                        let view = view_entity.clone();
-                                        move |_, _, cx| {
-                                            view.update(cx, |v, cx| {
-                                                v.set_diff_mode(DiffMode::Unified, cx);
+                            .child(
+                                h_flex()
+                                    .p(px(2.))
+                                    .gap(px(2.))
+                                    .items_center()
+                                    .rounded_full()
+                                    .bg(accents.sunken_bg)
+                                    .child({
+                                        let btn = Button::new("diff-mode-unified")
+                                            .xsmall()
+                                            .rounded(aether::pill_radius())
+                                            .label("Unified")
+                                            .on_click({
+                                                let view = view_entity.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.set_diff_mode(DiffMode::Unified, cx);
+                                                    });
+                                                }
                                             });
+                                        if diff_mode == DiffMode::Unified {
+                                            btn.primary()
+                                        } else {
+                                            btn.ghost()
                                         }
-                                    });
-                                if diff_mode == DiffMode::Unified {
-                                    btn.primary()
-                                } else {
-                                    btn.outline()
-                                }
-                            })
-                            .child({
-                                let btn = Button::new("diff-mode-split")
-                                    .xsmall()
-                                    .label("Split")
-                                    .on_click({
-                                        let view = view_entity.clone();
-                                        move |_, _, cx| {
-                                            view.update(cx, |v, cx| {
-                                                v.set_diff_mode(DiffMode::Split, cx);
+                                    })
+                                    .child({
+                                        let btn = Button::new("diff-mode-split")
+                                            .xsmall()
+                                            .rounded(aether::pill_radius())
+                                            .label("Split")
+                                            .on_click({
+                                                let view = view_entity.clone();
+                                                move |_, _, cx| {
+                                                    view.update(cx, |v, cx| {
+                                                        v.set_diff_mode(DiffMode::Split, cx);
+                                                    });
+                                                }
                                             });
+                                        if diff_mode == DiffMode::Split {
+                                            btn.primary()
+                                        } else {
+                                            btn.ghost()
                                         }
-                                    });
-                                if diff_mode == DiffMode::Split {
-                                    btn.primary()
-                                } else {
-                                    btn.outline()
-                                }
-                            })
+                                    }),
+                            )
                             .child(
                                 Button::new("diff-prev-change")
                                     .xsmall()
                                     .ghost()
+                                    .rounded(aether::pill_radius())
                                     .icon(IconName::ArrowUp)
                                     .tooltip("Previous change hunk")
                                     .on_click({
@@ -469,6 +576,7 @@ impl Render for DiffPaneView {
                                 Button::new("diff-next-change")
                                     .xsmall()
                                     .ghost()
+                                    .rounded(aether::pill_radius())
                                     .icon(IconName::ArrowDown)
                                     .tooltip("Next change hunk")
                                     .on_click({
@@ -482,6 +590,7 @@ impl Render for DiffPaneView {
                                 Button::new("diff-restore-selected")
                                     .xsmall()
                                     .danger()
+                                    .rounded(aether::pill_radius())
                                     .icon(IconName::Undo2)
                                     .label(if checked_count > 0 {
                                         format!("Restore {checked_count}…")
@@ -508,6 +617,7 @@ impl Render for DiffPaneView {
             .child(
                 div().flex_1().min_h_0().min_w_0().w_full().child(
                     v_resizable("diff-pane-split")
+                        .with_handle_appearance(aether::soft_resize_handle())
                         .child(
                             resizable_panel()
                                 .size(px(210.))
@@ -520,12 +630,10 @@ impl Render for DiffPaneView {
                                         .child(
                                             h_flex()
                                                 .w_full()
-                                                .px_2()
-                                                .py_1()
+                                                .px_3()
+                                                .py_1p5()
                                                 .gap_2()
                                                 .items_center()
-                                                .border_b_1()
-                                                .border_color(cx.theme().border)
                                                 .child(
                                                     div().flex_1().min_w_0().child(
                                                         Input::new(&self.filter_input)
@@ -545,6 +653,7 @@ impl Render for DiffPaneView {
                                                     Button::new("diff-check-all")
                                                         .xsmall()
                                                         .ghost()
+                                                        .rounded(aether::pill_radius())
                                                         .label("All")
                                                         .disabled(visible_leaves.is_empty())
                                                         .on_click({
@@ -564,6 +673,7 @@ impl Render for DiffPaneView {
                                                     Button::new("diff-check-none")
                                                         .xsmall()
                                                         .ghost()
+                                                        .rounded(aether::pill_radius())
                                                         .label("None")
                                                         .disabled(checked_count == 0)
                                                         .on_click(move |_, _, cx| {
@@ -590,12 +700,7 @@ impl Render for DiffPaneView {
                                                 .w_full()
                                                 .map(|host| {
                                                     if status_loading {
-                                                        host.flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .text_xs()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("Loading changed files…")
+                                                        host.child(aether::skeleton_rows(6))
                                                             .into_any_element()
                                                     } else if let Some(err) = status_error {
                                                         host.p_3()
@@ -605,21 +710,27 @@ impl Render for DiffPaneView {
                                                             ))
                                                             .into_any_element()
                                                     } else if total_changes == 0 {
-                                                        host.flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .text_xs()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("No changed files in this range.")
-                                                            .into_any_element()
+                                                        host.child(aether::empty_state_card(
+                                                            "diff-tree-empty",
+                                                            LucideIconName::FolderTree,
+                                                            cx.theme().muted_foreground,
+                                                            "No changed files",
+                                                            "No file deltas were recorded across this snapshot range.",
+                                                            None,
+                                                            cx,
+                                                        ))
+                                                        .into_any_element()
                                                     } else if self.visible_leaves.is_empty() {
-                                                        host.flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .text_xs()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child("No file paths match the filter.")
-                                                            .into_any_element()
+                                                        host.child(aether::empty_state_card(
+                                                            "diff-tree-filter-empty",
+                                                            LucideIconName::Search,
+                                                            cx.theme().info,
+                                                            "No matching file paths",
+                                                            "Adjust the path filter above to view changed files.",
+                                                            None,
+                                                            cx,
+                                                        ))
+                                                        .into_any_element()
                                                     } else {
                                                         host.child(
                                                             tree(&self.tree_state, move |ix, entry, _selected, _window, cx| {
@@ -644,23 +755,11 @@ impl Render for DiffPaneView {
                                                                         let active = m.is_leaf
                                                                             && selected_for_tree.as_deref() == Some(m.full_path.as_str());
                                                                         let badge = if m.is_leaf {
-                                                                            match m.change {
-                                                                                ContentChange::Created => {
-                                                                                    Tag::success().xsmall().outline().child("A").into_any_element()
-                                                                                }
-                                                                                ContentChange::Modified => {
-                                                                                    Tag::warning().xsmall().outline().child("M").into_any_element()
-                                                                                }
-                                                                                ContentChange::Deleted => {
-                                                                                    Tag::danger().xsmall().outline().child("D").into_any_element()
-                                                                                }
-                                                                                ContentChange::Unchanged => {
-                                                                                    Tag::info().xsmall().outline().child("Attr").into_any_element()
-                                                                                }
-                                                                            }
+                                                                            change_badge(m.change)
                                                                         } else {
                                                                             div()
                                                                                 .text_xs()
+                                                                                .font_family(cx.theme().mono_font_family.clone())
                                                                                 .text_color(cx.theme().muted_foreground)
                                                                                 .child(format!("{}", m.leaf_count))
                                                                                 .into_any_element()
@@ -829,7 +928,56 @@ impl Render for DiffPaneView {
                                     .size_full()
                                     .min_h_0()
                                     .min_w_0()
-                                    .bg(cx.theme().background)
+                                    .bg(accents.surface_diff)
+                                    .when_some(selected_file.clone(), |this, path| {
+                                        this.child(
+                                            h_flex()
+                                                .w_full()
+                                                .h(px(32.))
+                                                .px_3p5()
+                                                .gap_2()
+                                                .items_center()
+                                                .justify_between()
+                                                .bg(accents.header_tint)
+                                                .child(
+                                                    h_flex()
+                                                        .flex_1()
+                                                        .min_w_0()
+                                                        .gap_1p5()
+                                                        .items_center()
+                                                        .child(
+                                                            Icon::new(LucideIconName::FileDiff)
+                                                                .xsmall()
+                                                                .text_color(cx.theme().primary),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .text_xs()
+                                                                .font_family(
+                                                                    cx.theme().mono_font_family.clone(),
+                                                                )
+                                                                .text_color(cx.theme().foreground)
+                                                                .truncate()
+                                                                .child(path.clone()),
+                                                        ),
+                                                )
+                                                .child(
+                                                    h_flex()
+                                                        .gap_1p5()
+                                                        .items_center()
+                                                        .when_some(selected_change, |row, ch| {
+                                                            row.child(change_badge(ch))
+                                                        })
+                                                        .child(
+                                                            Clipboard::new("diff-copy-path")
+                                                                .value(path)
+                                                                .tooltip("Copy file path"),
+                                                        ),
+                                                ),
+                                        )
+                                    })
                                     .when(diff_truncated, |this| {
                                         this.child(
                                             Alert::warning(
@@ -846,12 +994,8 @@ impl Render for DiffPaneView {
                                     .child(if diff_loading {
                                         div()
                                             .flex_1()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("Loading diff…")
+                                            .min_h_0()
+                                            .child(aether::skeleton_diff_lines(10))
                                             .into_any_element()
                                     } else if let Some(err) = diff_error {
                                         div()
@@ -862,34 +1006,18 @@ impl Render for DiffPaneView {
                                     } else if diff_is_binary {
                                         div()
                                             .flex_1()
-                                            .flex()
-                                            .flex_col()
-                                            .items_center()
-                                            .justify_center()
-                                            .gap_2()
-                                            .p_4()
-                                            .child(
-                                                Icon::new(IconName::File)
-                                                    .size_8()
-                                                    .text_color(cx.theme().muted_foreground),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_sm()
-                                                    .font_semibold()
-                                                    .text_color(cx.theme().foreground)
-                                                    .child("Binary file changed"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        selected_file
-                                                            .clone()
-                                                            .unwrap_or_else(|| "<unknown>".to_string()),
-                                                    ),
-                                            )
+                                            .min_h_0()
+                                            .child(aether::empty_state_card(
+                                                "diff-binary-state",
+                                                LucideIconName::Archive,
+                                                cx.theme().warning,
+                                                "Binary file modified",
+                                                selected_file
+                                                    .clone()
+                                                    .unwrap_or_else(|| "<unknown>".to_string()),
+                                                None,
+                                                cx,
+                                            ))
                                             .into_any_element()
                                     } else if let Some(raw) = &self.raw_fallback {
                                         div()
@@ -903,11 +1031,19 @@ impl Render for DiffPaneView {
                                                 v_flex()
                                                     .gap_2()
                                                     .when_some(self.parse_error.clone(), |this, err| {
-                                                        this.child(Alert::info("diff-raw-notice", format!("Raw diff view ({err})")).small())
+                                                        this.child(
+                                                            Alert::info(
+                                                                "diff-raw-notice",
+                                                                format!("Raw diff view ({err})"),
+                                                            )
+                                                            .small(),
+                                                        )
                                                     })
                                                     .child(
                                                         div()
-                                                            .font_family(cx.theme().mono_font_family.clone())
+                                                            .font_family(
+                                                                cx.theme().mono_font_family.clone(),
+                                                            )
                                                             .text_xs()
                                                             .text_color(cx.theme().muted_foreground)
                                                             .child(raw.clone()),
@@ -917,12 +1053,16 @@ impl Render for DiffPaneView {
                                     } else if selected_file.is_none() {
                                         div()
                                             .flex_1()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child("Select a changed file above to view its diff.")
+                                            .min_h_0()
+                                            .child(aether::empty_state_card(
+                                                "diff-unselected-state",
+                                                LucideIconName::FileDiff,
+                                                cx.theme().primary,
+                                                "Select a changed file",
+                                                "Pick any path from the tree above to inspect line-by-line diffs.",
+                                                None,
+                                                cx,
+                                            ))
                                             .into_any_element()
                                     } else {
                                         div()

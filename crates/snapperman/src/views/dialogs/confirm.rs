@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::select::{Select, SelectState};
@@ -12,7 +13,8 @@ use gpui_kit::{
 use snapper_core::model::{CleanupAlgorithm, Snapshot, SnapshotKey};
 
 use crate::state::WorkspaceModel;
-use crate::views::dialogs::ChoiceItem;
+use crate::views::aether;
+use crate::views::dialogs::{ChoiceItem, dialog_header_banner};
 
 pub fn open_delete_confirm_dialog(
     workspace: Entity<WorkspaceModel>,
@@ -248,12 +250,13 @@ pub fn open_cleanup_dialog(
             .child(
                 v_flex()
                     .gap_3()
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Apply a Snapper retention algorithm immediately to reclaim space in the chosen configuration."),
-                    )
+                    .child(dialog_header_banner(
+                        LucideIconName::Archive,
+                        cx.theme().warning,
+                        "Execute Snapper Retention Cleanup",
+                        "Apply a Snapper cleanup algorithm immediately to prune eligible snapshots and reclaim space.",
+                        cx,
+                    ))
                     .child(
                         v_form()
                             .child(field().label("Configuration").child(Select::new(&config_select)))
@@ -273,6 +276,7 @@ pub fn open_cleanup_dialog(
                     .gap_2()
                     .child(
                         Button::new("cleanup-cancel")
+                            .rounded(aether::pill_radius())
                             .label("Cancel")
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
@@ -281,6 +285,7 @@ pub fn open_cleanup_dialog(
                     .child(
                         Button::new("dialog-cleanup-submit")
                             .primary()
+                            .rounded(aether::pill_radius())
                             .label("Run Cleanup")
                             .on_click(move |_, window, cx| {
                                 let Some(cfg) = cfg_sel.read(cx).selected_value().cloned() else {

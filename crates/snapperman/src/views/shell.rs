@@ -2,10 +2,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as LucideIconName;
-use gpui_kit::component::badge::Badge;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::diff::DiffMode;
 use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tag::Tag;
@@ -26,7 +26,8 @@ use crate::actions::{
     ViewSettings, ViewSnapshots,
 };
 use crate::state::{ActiveView, AppPrefs, ToastLevel, WorkspaceEvent, WorkspaceModel};
-use crate::theme::{AppThemePreset, apply_theme_preset};
+use crate::theme::{AppThemePreset, ThemeAccents, apply_theme_preset};
+use crate::views::aether;
 use crate::views::analytics::AnalyticsView;
 use crate::views::command_palette::open_command_palette;
 use crate::views::dialogs::auth::open_auth_dialog;
@@ -246,6 +247,7 @@ impl Render for SnapperShell {
             .as_deref()
             .unwrap_or("All Configs")
             .to_string();
+        let settings_cfg_label = ws.settings_config().map(ToOwned::to_owned);
 
         let total_tracked: u64 = ws
             .filtered_indices()
@@ -260,10 +262,34 @@ impl Render for SnapperShell {
         let auth_required = ws.auth_required();
         let is_authenticated = ws.is_authenticated();
 
+        let view_title = match active_view {
+            ActiveView::Snapshots => "Snapshots",
+            ActiveView::Analytics => "Storage Analytics",
+            ActiveView::Settings => "Config & Retention",
+        };
+        let scope_crumb: Option<String> = match active_view {
+            ActiveView::Snapshots => Some(active_cfg_label.clone()),
+            ActiveView::Analytics => None,
+            ActiveView::Settings => settings_cfg_label,
+        };
+
+        let conduit_color = if auth_required {
+            cx.theme().warning
+        } else if hydrating || busy_label.is_some() {
+            cx.theme().info
+        } else if is_mock {
+            cx.theme().warning
+        } else {
+            cx.theme().success
+        };
+        let accents = ThemeAccents::from_theme(cx.theme());
+
         v_flex()
             .id("snapperman-shell")
             .key_context("Snapperman")
             .track_focus(&self.focus_handle)
+            .relative()
+            .overflow_hidden()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -322,8 +348,9 @@ impl Render for SnapperShell {
                 this.prefs.split_diff = split_now;
                 this.save_prefs_if_enabled();
             }))
+            .child(aether::theme_backdrop(theme_preset, cx))
             .child(
-                TitleBar::new().child(
+                TitleBar::new().border_b_0().bg(accents.chrome_bg).child(
                     h_flex()
                         .w_full()
                         .items_center()
@@ -337,6 +364,7 @@ impl Render for SnapperShell {
                                     Button::new("titlebar-toggle-sidebar")
                                         .xsmall()
                                         .ghost()
+                                        .rounded(aether::pill_radius())
                                         .icon(if sidebar_collapsed {
                                             IconName::PanelLeftOpen
                                         } else {
@@ -347,6 +375,7 @@ impl Render for SnapperShell {
                                             this.toggle_sidebar(cx);
                                         })),
                                 )
+                                .child(aether::brand_sigil(px(18.), cx))
                                 .child(
                                     div()
                                         .text_xs()
@@ -354,24 +383,81 @@ impl Render for SnapperShell {
                                         .text_color(cx.theme().foreground)
                                         .child("snapperman"),
                                 )
+                                .child(
+                                    Icon::new(LucideIconName::ChevronRight)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_medium()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(view_title),
+                                )
+                                .when_some(scope_crumb, |this, cfg| {
+                                    this.child(
+                                        Icon::new(LucideIconName::ChevronRight)
+                                            .xsmall()
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .font_semibold()
+                                            .text_color(cx.theme().accent_foreground)
+                                            .child(cfg),
+                                    )
+                                })
                                 .child(if is_mock {
-                                    Tag::warning().xsmall().outline().child("Mock")
+                                    Tag::warning()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .items_center()
+                                                .child(Icon::new(LucideIconName::Cpu).xsmall())
+                                                .child("Mock"),
+                                        )
                                 } else if is_dbus {
-                                    Tag::success().xsmall().outline().child("D-Bus")
+                                    Tag::success()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .items_center()
+                                                .child(Icon::new(LucideIconName::Zap).xsmall())
+                                                .child("D-Bus"),
+                                        )
                                 } else {
-                                    Tag::info().xsmall().outline().child("CLI")
+                                    Tag::info()
+                                        .xsmall()
+                                        .rounded_full()
+                                        .border_0()
+                                        .child(
+                                            h_flex()
+                                                .gap_1()
+                                                .items_center()
+                                                .child(Icon::new(LucideIconName::Activity).xsmall())
+                                                .child("CLI"),
+                                        )
                                 }),
                         )
                         .child(
                             h_flex()
-                                .gap_1()
+                                .gap_1p5()
                                 .items_center()
                                 .when(auth_required, |this| {
                                     this.child(
                                         Button::new("titlebar-auth-unlock")
                                             .xsmall()
                                             .warning()
-                                            .icon(Icon::new(LucideIconName::Lock))
+                                            .rounded(aether::pill_radius())
+                                            .icon(Icon::new(LucideIconName::ShieldAlert))
                                             .label("Authenticate")
                                             .tooltip("Unlock administrator privileges for Snapper")
                                             .on_click(cx.listener(|this, _, window, cx| {
@@ -385,27 +471,42 @@ impl Render for SnapperShell {
                                     )
                                 })
                                 .when(!auth_required && is_authenticated, |this| {
-                                    this.child(Tag::success().xsmall().outline().child("Unlocked"))
-                                        .child(
-                                            Button::new("titlebar-auth-lock")
-                                                .xsmall()
-                                                .ghost()
-                                                .icon(Icon::new(LucideIconName::LockOpen))
-                                                .label("Lock")
-                                                .tooltip("Clear cached administrator credentials from memory")
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.workspace
-                                                        .update(cx, |ws, cx| ws.lock_session(cx));
-                                                })),
-                                        )
+                                    this.child(
+                                        Tag::success()
+                                            .xsmall()
+                                            .rounded_full()
+                                            .border_0()
+                                            .child(
+                                                h_flex()
+                                                    .gap_1()
+                                                    .items_center()
+                                                    .child(Icon::new(LucideIconName::ShieldCheck).xsmall())
+                                                    .child("Unlocked"),
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("titlebar-auth-lock")
+                                            .xsmall()
+                                            .ghost()
+                                            .rounded(aether::pill_radius())
+                                            .icon(Icon::new(LucideIconName::LockOpen))
+                                            .label("Lock")
+                                            .tooltip("Clear cached administrator credentials from memory")
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.workspace
+                                                    .update(cx, |ws, cx| ws.lock_session(cx));
+                                            })),
+                                    )
                                 })
                                 .child(
                                     Button::new("titlebar-command-palette")
                                         .xsmall()
-                                        .ghost()
+                                        .secondary()
+                                        .rounded(aether::pill_radius())
                                         .icon(IconName::Search)
-                                        .label("Commands")
+                                        .label("Commands…")
                                         .tooltip("Open Command Palette (Cmd/Ctrl+K)")
+                                        .child(aether::shortcut_kbd("cmd-k", "ctrl-k", cx))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.open_palette(window, cx);
                                         })),
@@ -415,6 +516,7 @@ impl Render for SnapperShell {
                                         Button::new("titlebar-toggle-inspector")
                                             .xsmall()
                                             .ghost()
+                                            .rounded(aether::pill_radius())
                                             .icon(IconName::PanelRight)
                                             .tooltip("Toggle Inspector (Cmd/Ctrl+I)")
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -426,13 +528,12 @@ impl Render for SnapperShell {
                                     Button::new("titlebar-cycle-theme")
                                         .xsmall()
                                         .ghost()
-                                        .icon(match theme_preset {
-                                            AppThemePreset::CyberpunkDracula => IconName::Palette,
-                                            AppThemePreset::SystemDark => IconName::Moon,
-                                            AppThemePreset::SystemLight => IconName::Sun,
-                                        })
+                                        .rounded(aether::pill_radius())
+                                        .icon(Icon::new(theme_preset.icon()))
                                         .label(theme_preset.short_label())
-                                        .tooltip("Cycle Theme: Cyberpunk Dracula -> System Dark -> System Light (Cmd/Ctrl+T)")
+                                        .tooltip(
+                                            "Cycle Theme (Cmd/Ctrl+T): Aetherpunk Citadel -> Arcanepunk Enclave -> Aether Parchment -> Cyberpunk Dracula -> System Dark -> System Light",
+                                        )
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.cycle_theme(cx);
                                         })),
@@ -461,9 +562,9 @@ impl Render for SnapperShell {
                                     .child(
                                         div().flex_1().min_h_0().min_w_0().w_full().child(
                                             h_resizable("main-content-split")
+                                                .with_handle_appearance(aether::soft_resize_handle())
                                                 .child(
-                                                    resizable_panel()
-                                                        .child(self.table.clone()),
+                                                    resizable_panel().child(self.table.clone()),
                                                 )
                                                 .child(
                                                     resizable_panel()
@@ -482,44 +583,109 @@ impl Render for SnapperShell {
                     ),
             )
             .child({
-                let count_text: SharedString = if filtered_count == total_count {
+                let is_filtered = filtered_count != total_count;
+                let count_text: SharedString = if !is_filtered {
                     format!("{total_count} snapshots").into()
                 } else {
-                    format!("{filtered_count} / {total_count} shown").into()
+                    format!("{filtered_count} / {total_count} filtered").into()
                 };
                 let space_text: SharedString = if hydrating {
                     "Calculating space…".into()
                 } else {
                     format!("Tracked: {}", format_size(total_tracked)).into()
                 };
+                let center_busy = busy_label.or_else(|| hydrating.then(|| "Hydrating space…".to_string()));
 
                 let mut bar = StatusBar::new()
+                    .border_t_0()
+                    .bg(accents.chrome_bg)
+                    .px_3()
                     .left(
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(div().text_xs().child(backend_label))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("•"))
-                            .child(div().text_xs().child(count_text))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("•"))
-                            .child(div().text_xs().child(space_text)),
+                            .child(div().size(px(7.)).rounded_full().bg(conduit_color))
+                            .child(div().text_xs().text_color(cx.theme().foreground).child(backend_label))
+                            .child(aether::status_dot(cx))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(LucideIconName::Layers)
+                                            .xsmall()
+                                            .text_color(if is_filtered {
+                                                cx.theme().info
+                                            } else {
+                                                cx.theme().muted_foreground
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(if is_filtered {
+                                                cx.theme().accent_foreground
+                                            } else {
+                                                cx.theme().muted_foreground
+                                            })
+                                            .child(count_text),
+                                    ),
+                            )
+                            .child(aether::status_dot(cx))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(LucideIconName::HardDrive)
+                                            .xsmall()
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                    .child(div().text_xs().child(space_text)),
+                            ),
                     )
                     .right(
                         h_flex()
                             .gap_2()
                             .items_center()
-                            .child(Badge::new().dot().color(cx.theme().primary))
-                            .child(div().text_xs().child(active_cfg_label))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("•"))
-                            .child(div().text_xs().child(theme_preset.label())),
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(LucideIconName::HardDrive)
+                                            .xsmall()
+                                            .text_color(cx.theme().primary),
+                                    )
+                                    .child(div().text_xs().child(active_cfg_label)),
+                            )
+                            .child(aether::status_dot(cx))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Icon::new(theme_preset.icon())
+                                            .xsmall()
+                                            .text_color(cx.theme().primary),
+                                    )
+                                    .child(div().text_xs().child(theme_preset.label())),
+                            )
+                            .child(aether::status_dot(cx))
+                            .child(aether::shortcut_kbd("cmd-k", "ctrl-k", cx)),
                     );
 
-                if let Some(busy) = busy_label {
+                if let Some(busy) = center_busy {
                     bar = bar.child(
                         h_flex()
-                            .gap_1()
+                            .gap_2()
                             .items_center()
-                            .child(Icon::new(IconName::Loader).xsmall())
+                            .child(
+                                Progress::new("status-hydration-progress")
+                                    .xsmall()
+                                    .loading(true)
+                                    .w(px(56.)),
+                            )
                             .child(div().text_xs().text_color(cx.theme().info).child(busy)),
                     );
                 }

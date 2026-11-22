@@ -1,3 +1,4 @@
+pub mod aether;
 pub mod analytics;
 pub mod command_palette;
 pub mod dialogs;

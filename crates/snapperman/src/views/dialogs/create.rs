@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputState};
@@ -14,7 +15,8 @@ use gpui_kit::{
 use snapper_core::model::{CleanupAlgorithm, CreateSnapshotRequest, SnapshotCreateType};
 
 use crate::state::WorkspaceModel;
-use crate::views::dialogs::{ChoiceItem, parse_userdata_pairs};
+use crate::views::aether;
+use crate::views::dialogs::{ChoiceItem, dialog_header_banner, parse_userdata_pairs};
 
 pub fn open_create_snapshot_dialog(
     workspace: Entity<WorkspaceModel>,
@@ -168,6 +170,13 @@ pub fn open_create_snapshot_dialog(
             .child(
                 v_flex()
                     .gap_3()
+                    .child(dialog_header_banner(
+                        LucideIconName::Plus,
+                        cx.theme().primary,
+                        "Record Btrfs Recovery Checkpoint",
+                        "Create a standalone single snapshot or a paired pre/post transaction marker.",
+                        cx,
+                    ))
                     .child(form)
                     .children(current_err.map(|err| {
                         div()
@@ -183,6 +192,7 @@ pub fn open_create_snapshot_dialog(
                     .gap_2()
                     .child(
                         Button::new("create-cancel")
+                            .rounded(aether::pill_radius())
                             .label("Cancel")
                             .on_click(|_, window, cx| {
                                 window.close_dialog(cx);
@@ -191,6 +201,7 @@ pub fn open_create_snapshot_dialog(
                     .child(
                         Button::new("dialog-create-submit")
                             .primary()
+                            .rounded(aether::pill_radius())
                             .label("Create Snapshot")
                             .on_click(move |_, window, cx| {
                                 let Some(config) = cfg_sel.read(cx).selected_value().cloned() else {

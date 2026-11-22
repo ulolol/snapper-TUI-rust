@@ -2,11 +2,12 @@ use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::base::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::checkbox::Checkbox;
-use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::component::menu::PopupMenuItem;
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, DataTable, TableDelegate, TableEvent, TableState};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, h_flex, v_flex,
+};
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, InteractiveElement as _, IntoElement,
     ParentElement as _, Render, SharedString, Stateful, Styled as _, Subscription, Window, div,
@@ -14,9 +15,11 @@ use gpui_kit::{
 };
 use snapper_core::format::format_size;
 use snapper_core::model::{Snapshot, SnapshotKey};
-use snapper_core::query::SortKey;
+use snapper_core::query::{SortKey, TypeFilter};
 
 use crate::state::{InspectorTab, WorkspaceEvent, WorkspaceModel};
+use crate::theme::ThemeAccents;
+use crate::views::aether;
 use crate::views::dialogs::compare::open_compare_dialog;
 use crate::views::dialogs::confirm::{
     open_delete_confirm_dialog, open_rollback_confirm_dialog,
@@ -28,6 +31,7 @@ pub struct SnapshotTableDelegate {
     columns: Vec<Column>,
     rows: Vec<Snapshot>,
     checked: std::collections::BTreeSet<SnapshotKey>,
+    max_used_space: u64,
     hydrating_space: bool,
     loading: bool,
 }
@@ -40,15 +44,15 @@ impl SnapshotTableDelegate {
                 .resizable(false)
                 .movable(false)
                 .selectable(false),
-            Column::new("number", "#").width(px(124.)).descending(),
-            Column::new("config", "Config").width(px(96.)).sortable(),
-            Column::new("type", "Type").width(px(108.)).sortable(),
-            Column::new("date", "Date").width(px(156.)).sortable(),
+            Column::new("number", "#").width(px(136.)).descending(),
+            Column::new("config", "Config").width(px(92.)).sortable(),
+            Column::new("type", "Type").width(px(116.)).sortable(),
+            Column::new("date", "Date").width(px(154.)).sortable(),
             Column::new("space", "Space")
-                .width(px(96.))
+                .width(px(108.))
                 .sortable()
                 .text_right(),
-            Column::new("cleanup", "Cleanup").width(px(100.)).sortable(),
+            Column::new("cleanup", "Cleanup").width(px(96.)).sortable(),
             Column::new("description", "Description")
                 .width(px(320.))
                 .sortable(),
@@ -59,6 +63,7 @@ impl SnapshotTableDelegate {
             columns,
             rows: Vec::new(),
             checked: std::collections::BTreeSet::new(),
+            max_used_space: 0,
             hydrating_space: false,
             loading: false,
         }
@@ -71,6 +76,12 @@ impl SnapshotTableDelegate {
             .iter()
             .filter_map(|&idx| ws.snapshots().get(idx).cloned())
             .collect();
+        self.max_used_space = self
+            .rows
+            .iter()
+            .filter_map(|s| s.used_space)
+            .max()
+            .unwrap_or(0);
         self.checked = ws.checked_keys().clone();
         self.hydrating_space = ws.hydrating_space();
         self.loading = ws.loading_snapshots() && self.rows.is_empty();
@@ -164,6 +175,14 @@ impl TableDelegate for SnapshotTableDelegate {
                     .into_any_element()
             }
             1 => {
+                let num_color = if row.number == 0 {
+                    cx.theme().info
+                } else if row.active || row.default {
+                    cx.theme().primary
+                } else {
+                    cx.theme().foreground
+                };
+
                 h_flex()
                     .gap_1()
                     .items_center()
@@ -171,29 +190,36 @@ impl TableDelegate for SnapshotTableDelegate {
                         div()
                             .font_family(cx.theme().mono_font_family.clone())
                             .font_semibold()
-                            .text_color(if row.number == 0 {
-                                cx.theme().info
-                            } else {
-                                cx.theme().foreground
-                            })
+                            .text_color(num_color)
                             .child(format!("#{}", row.number)),
                     )
+                    .when(row.is_protected(), |this| {
+                        this.child(
+                            Icon::new(LucideIconName::ShieldCheck)
+                                .xsmall()
+                                .text_color(if row.active {
+                                    cx.theme().success
+                                } else {
+                                    cx.theme().info
+                                }),
+                        )
+                    })
                     .when(row.active, |this| {
-                        this.child(Tag::success().xsmall().outline().child("act"))
+                        this.child(Tag::success().xsmall().rounded_full().border_0().child("act"))
                     })
                     .when(row.default, |this| {
-                        this.child(Tag::info().xsmall().outline().child("def"))
+                        this.child(Tag::info().xsmall().rounded_full().border_0().child("def"))
                     })
                     .when(row.is_pinned(), |this| {
                         this.child(
-                            Icon::new(IconName::StarFill)
+                            Icon::new(LucideIconName::Pin)
                                 .xsmall()
                                 .text_color(cx.theme().warning),
                         )
                     })
-                    .when(!row.is_pinned() && row.is_important(), |this| {
+                    .when(row.is_important(), |this| {
                         this.child(
-                            Icon::new(IconName::Asterisk)
+                            Icon::new(LucideIconName::Sparkles)
                                 .xsmall()
                                 .text_color(cx.theme().accent_foreground),
                         )
@@ -202,6 +228,7 @@ impl TableDelegate for SnapshotTableDelegate {
             }
             2 => div()
                 .text_sm()
+                .font_medium()
                 .text_color(cx.theme().foreground)
                 .child(row.config.clone())
                 .into_any_element(),
@@ -218,9 +245,9 @@ impl TableDelegate for SnapshotTableDelegate {
                     }
                 };
                 let tag = match row.snapshot_type.as_str() {
-                    "pre" => Tag::warning().xsmall().outline().child(type_label),
-                    "post" => Tag::info().xsmall().outline().child(type_label),
-                    _ => Tag::secondary().xsmall().child(type_label),
+                    "pre" => Tag::warning().xsmall().rounded_full().border_0().child(type_label),
+                    "post" => Tag::info().xsmall().rounded_full().border_0().child(type_label),
+                    _ => Tag::secondary().xsmall().rounded_full().border_0().child(type_label),
                 };
                 let pair_num = if row.is_pre() {
                     row.post_number
@@ -242,7 +269,9 @@ impl TableDelegate for SnapshotTableDelegate {
                             Button::new(jump_id)
                                 .xsmall()
                                 .ghost()
-                                .label(format!("→#{num}"))
+                                .rounded(aether::pill_radius())
+                                .icon(Icon::new(LucideIconName::GitCompareArrows))
+                                .label(format!("#{num}"))
                                 .tooltip(format!("Select paired snapshot #{num}"))
                                 .on_click(move |_, _, cx| {
                                     ws_jump.update(cx, |ws, cx| {
@@ -259,22 +288,33 @@ impl TableDelegate for SnapshotTableDelegate {
                 .text_color(cx.theme().muted_foreground)
                 .child(row.date.clone())
                 .into_any_element(),
-            5 => div()
+            5 => v_flex()
                 .w_full()
-                .text_right()
-                .text_xs()
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_color(if row.used_space.is_some() {
-                    cx.theme().foreground
-                } else {
-                    cx.theme().muted_foreground
-                })
-                .child(self.space_display(&row))
+                .gap_0p5()
+                .items_end()
+                .child(
+                    div()
+                        .w_full()
+                        .text_right()
+                        .text_xs()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_color(if row.used_space.is_some() {
+                            cx.theme().foreground
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(self.space_display(&row)),
+                )
+                .when_some(
+                    row.used_space.filter(|_| self.max_used_space > 0),
+                    |this, bytes| this.child(aether::space_micro_bar(bytes, self.max_used_space, cx)),
+                )
                 .into_any_element(),
             6 => {
                 let cleanup = row.cleanup.clone().unwrap_or_else(|| "—".to_string());
                 div()
                     .text_xs()
+                    .font_family(cx.theme().mono_font_family.clone())
                     .text_color(if row.cleanup.is_some() {
                         cx.theme().foreground
                     } else {
@@ -376,40 +416,73 @@ impl TableDelegate for SnapshotTableDelegate {
         _window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let err = self.workspace.read(cx).last_error().map(ToOwned::to_owned);
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .p_6()
-            .child(
-                Icon::new(IconName::Inbox)
-                    .size_10()
-                    .text_color(cx.theme().muted_foreground),
+        if self.loading {
+            return aether::skeleton_rows(8).into_any_element();
+        }
+
+        let (err, has_filters) = {
+            let ws = self.workspace.read(cx);
+            let f = ws.filter();
+            (
+                ws.last_error().map(ToOwned::to_owned),
+                !f.query.trim().is_empty()
+                    || f.type_filter != TypeFilter::All
+                    || f.config.is_some(),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .font_semibold()
-                    .text_color(cx.theme().foreground)
-                    .child(if err.is_some() {
-                        "Unable to load snapshots"
-                    } else {
-                        "No snapshots match your filters"
-                    }),
+        };
+
+        if let Some(msg) = err {
+            return aether::empty_state_card(
+                "table-empty-error",
+                LucideIconName::TriangleAlert,
+                cx.theme().danger,
+                "Unable to load snapshots",
+                msg,
+                None,
+                cx,
             )
-            .when_some(err, |this, msg| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().danger)
-                        .child(msg),
-                )
-            })
-            .into_any_element()
+            .into_any_element();
+        }
+
+        if has_filters {
+            let ws_clear = self.workspace.clone();
+            let clear_btn = Button::new("table-clear-filters")
+                .primary()
+                .small()
+                .rounded(aether::pill_radius())
+                .icon(Icon::new(LucideIconName::RotateCcw))
+                .label("Clear Filters")
+                .on_click(move |_, _, cx| {
+                    ws_clear.update(cx, |ws, cx| {
+                        ws.set_query(String::new(), cx);
+                        ws.set_type_filter(TypeFilter::All, cx);
+                        ws.set_config_filter(None, cx);
+                    });
+                })
+                .into_any_element();
+
+            return aether::empty_state_card(
+                "table-empty-filtered",
+                LucideIconName::Search,
+                cx.theme().info,
+                "No snapshots match your filters",
+                "Try widening your search query, type filter, or selected Snapper configuration.",
+                Some(clear_btn),
+                cx,
+            )
+            .into_any_element();
+        }
+
+        aether::empty_state_card(
+            "table-empty-none",
+            LucideIconName::Inbox,
+            cx.theme().muted_foreground,
+            "No snapshots available",
+            "Create a snapshot from the toolbar above to record your first recovery checkpoint.",
+            None,
+            cx,
+        )
+        .into_any_element()
     }
 
     fn context_menu(
@@ -453,7 +526,7 @@ impl TableDelegate for SnapshotTableDelegate {
         )
         .item(
             PopupMenuItem::new("Compare With…")
-                .icon(IconName::Replace)
+                .icon(Icon::new(LucideIconName::GitCompareArrows))
                 .on_click(move |_, window, cx| {
                     open_compare_dialog(
                         ws_compare.clone(),
@@ -471,9 +544,9 @@ impl TableDelegate for SnapshotTableDelegate {
                 "Pin Snapshot"
             })
             .icon(if is_pinned {
-                IconName::StarOff
+                Icon::new(LucideIconName::PinOff)
             } else {
-                IconName::Star
+                Icon::new(LucideIconName::Pin)
             })
             .on_click(move |_, _, cx| {
                 ws_pin.update(cx, |ws, cx| {
@@ -492,7 +565,7 @@ impl TableDelegate for SnapshotTableDelegate {
         .item(PopupMenuItem::separator())
         .item(
             PopupMenuItem::new("Rollback…")
-                .icon(IconName::Undo2)
+                .icon(Icon::new(LucideIconName::RotateCcw))
                 .disabled(is_zero)
                 .on_click(move |_, window, cx| {
                     open_rollback_confirm_dialog(ws_rb.clone(), snap_rb.clone(), window, cx);
@@ -600,12 +673,13 @@ impl Render for SnapshotTableView {
             )
         };
 
-        div()
-            .id("snapshot-table-container")
-            .size_full()
-            .min_w_0()
-            .min_h_0()
-            .bg(cx.theme().table)
+        let panel_bg = if show_empty_panel {
+            ThemeAccents::from_theme(cx.theme()).surface_panel
+        } else {
+            cx.theme().transparent
+        };
+
+        aether::floating_panel("snapshot-table-container", panel_bg, cx)
             .child(if show_empty_panel {
                 let ws_auth = self.workspace.clone();
                 let ws_retry = self.workspace.clone();
@@ -615,12 +689,17 @@ impl Render for SnapshotTableView {
                     "Failed to Load Snapshots"
                 };
                 let icon_name = if auth_required {
-                    LucideIconName::Lock
+                    LucideIconName::KeyRound
                 } else {
                     LucideIconName::TriangleAlert
                 };
+                let accent_color = if auth_required {
+                    cx.theme().warning
+                } else {
+                    cx.theme().danger
+                };
 
-                gpui_kit::component::v_flex()
+                v_flex()
                     .id("snapshot-table-auth-state")
                     .test_support()
                     .size_full()
@@ -628,64 +707,59 @@ impl Render for SnapshotTableView {
                     .justify_center()
                     .p_6()
                     .child(
-                        gpui_kit::component::v_flex()
-                            .max_w(px(460.))
-                            .gap_3()
-                            .p_6()
-                            .rounded_lg()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().background)
-                            .items_center()
+                        aether::soft_card("snapshot-table-auth-plaque", cx)
+                            .max_w(px(470.))
+                            .w_full()
                             .child(
-                                Icon::new(icon_name)
-                                    .size_10()
-                                    .text_color(if auth_required {
-                                        cx.theme().warning
-                                    } else {
-                                        cx.theme().danger
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_semibold()
-                                    .text_color(cx.theme().foreground)
-                                    .child(heading),
-                            )
-                            .when_some(last_error, |this, err| {
-                                this.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .text_center()
-                                        .child(err),
-                                )
-                            })
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .pt_2()
-                                    .when(auth_required || supports_auth, |this| {
+                                v_flex()
+                                    .gap_3()
+                                    .p_6()
+                                    .items_center()
+                                    .child(aether::icon_medallion(icon_name, accent_color, 52.))
+                                    .child(
+                                        div()
+                                            .text_base()
+                                            .font_semibold()
+                                            .text_color(cx.theme().foreground)
+                                            .child(heading),
+                                    )
+                                    .when_some(last_error, |this, err| {
                                         this.child(
-                                            Button::new("table-auth-btn")
-                                                .primary()
-                                                .icon(Icon::new(LucideIconName::Lock))
-                                                .label("Authenticate…")
-                                                .on_click(move |_, _, cx| {
-                                                    ws_auth.update(cx, |ws, cx| {
-                                                        ws.request_authentication(cx);
-                                                    });
-                                                }),
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .text_center()
+                                                .child(err),
                                         )
                                     })
                                     .child(
-                                        Button::new("table-retry-btn")
-                                            .icon(IconName::RefreshCw)
-                                            .label("Retry")
-                                            .on_click(move |_, _, cx| {
-                                                ws_retry.update(cx, |ws, cx| ws.refresh(cx));
-                                            }),
+                                        h_flex()
+                                            .gap_2()
+                                            .pt_2()
+                                            .when(auth_required || supports_auth, |this| {
+                                                this.child(
+                                                    Button::new("table-auth-btn")
+                                                        .primary()
+                                                        .rounded(aether::pill_radius())
+                                                        .icon(Icon::new(LucideIconName::Lock))
+                                                        .label("Authenticate…")
+                                                        .on_click(move |_, _, cx| {
+                                                            ws_auth.update(cx, |ws, cx| {
+                                                                ws.request_authentication(cx);
+                                                            });
+                                                        }),
+                                                )
+                                            })
+                                            .child(
+                                                Button::new("table-retry-btn")
+                                                    .secondary()
+                                                    .rounded(aether::pill_radius())
+                                                    .icon(IconName::RefreshCw)
+                                                    .label("Retry")
+                                                    .on_click(move |_, _, cx| {
+                                                        ws_retry.update(cx, |ws, cx| ws.refresh(cx));
+                                                    }),
+                                            ),
                                     ),
                             ),
                     )

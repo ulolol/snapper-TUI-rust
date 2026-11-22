@@ -1,8 +1,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName as LucideIconName;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
-use gpui_kit::component::{IconName, WindowExt as _};
+use gpui_kit::component::{Icon, IconName, WindowExt as _};
 use gpui_kit::{App, AppContext as _, Entity, Focusable as _, ParentElement as _, Window, px};
 
 use crate::actions::{
@@ -10,7 +11,7 @@ use crate::actions::{
     ViewAnalytics, ViewSettings, ViewSnapshots,
 };
 use crate::state::{ActiveView, WorkspaceModel};
-use crate::theme::{AppThemePreset, apply_theme_preset};
+use crate::theme::AppThemePreset;
 use crate::views::dialogs::compare::open_compare_dialog;
 use crate::views::dialogs::confirm::open_cleanup_dialog;
 use crate::views::dialogs::create::open_create_snapshot_dialog;
@@ -54,7 +55,7 @@ pub fn open_command_palette(
             (
                 CommandItem::new()
                     .label("Compare Snapshots…")
-                    .icon(IconName::Replace)
+                    .icon(Icon::new(LucideIconName::GitCompareArrows))
                     .action(Box::new(CompareSnapshots)),
                 Box::new(move |window, cx| {
                     open_compare_dialog(ws2.clone(), None, window, cx);
@@ -63,7 +64,7 @@ pub fn open_command_palette(
             (
                 CommandItem::new()
                     .label("Run Snapper Cleanup…")
-                    .icon(IconName::RefreshCw),
+                    .icon(Icon::new(LucideIconName::Archive)),
                 Box::new(move |window, cx| {
                     let cfg = ws3.read(cx).filter().config.clone();
                     open_cleanup_dialog(ws3.clone(), cfg, window, cx);
@@ -109,7 +110,7 @@ pub fn open_command_palette(
             (
                 CommandItem::new()
                     .label("View: Snapshots")
-                    .icon(IconName::GalleryVerticalEnd)
+                    .icon(Icon::new(LucideIconName::Layers))
                     .action(Box::new(ViewSnapshots)),
                 Box::new(move |_, cx| {
                     ws_v1.update(cx, |ws, cx| ws.set_active_view(ActiveView::Snapshots, cx));
@@ -118,7 +119,7 @@ pub fn open_command_palette(
             (
                 CommandItem::new()
                     .label("View: Storage Analytics")
-                    .icon(IconName::ChartPie)
+                    .icon(Icon::new(LucideIconName::ChartPie))
                     .action(Box::new(ViewAnalytics)),
                 Box::new(move |_, cx| {
                     ws_v2.update(cx, |ws, cx| ws.set_active_view(ActiveView::Analytics, cx));
@@ -127,7 +128,7 @@ pub fn open_command_palette(
             (
                 CommandItem::new()
                     .label("View: Config & Retention")
-                    .icon(IconName::Settings)
+                    .icon(Icon::new(LucideIconName::SlidersHorizontal))
                     .action(Box::new(ViewSettings)),
                 Box::new(move |_, cx| {
                     ws_v3.update(cx, |ws, cx| ws.set_active_view(ActiveView::Settings, cx));
@@ -175,15 +176,10 @@ pub fn open_command_palette(
         .map(|preset| {
             let setter = on_set_theme.clone();
             let item = CommandItem::new()
-                .label(format!("Theme: {}", preset.label()))
-                .icon(match preset {
-                    AppThemePreset::CyberpunkDracula => IconName::Palette,
-                    AppThemePreset::SystemDark => IconName::Moon,
-                    AppThemePreset::SystemLight => IconName::Sun,
-                })
+                .label(format!("Theme: {} — {}", preset.label(), preset.description()))
+                .icon(Icon::new(preset.icon()))
                 .action(Box::new(CycleTheme));
             let handler: PaletteActionFn = Box::new(move |_, cx| {
-                apply_theme_preset(preset, cx);
                 (setter)(preset, cx);
             });
             (item, handler)
@@ -193,18 +189,6 @@ pub fn open_command_palette(
 
     let cmd_state = cx.new(|cx| CommandState::new(window, cx));
     let initial_focus = Rc::new(Cell::new(true));
-
-    // Store handlers by (section, row) for on_confirm lookup.
-    let handlers: Rc<Vec<Vec<PaletteActionFn>>> = Rc::new(
-        groups
-            .iter()
-            .map(|(_, items)| {
-                // We rebuild handlers vector cleanly alongside CommandGroups below; move them in next.
-                Vec::with_capacity(items.len())
-            })
-            .collect(),
-    );
-    let _ = handlers;
 
     let mut command_groups_data: Vec<(String, Vec<CommandItem>)> = Vec::with_capacity(groups.len());
     let mut callbacks: Vec<Vec<PaletteActionFn>> = Vec::with_capacity(groups.len());
@@ -247,7 +231,7 @@ pub fn open_command_palette(
 
         dialog
             .title("Command Palette")
-            .width(px(560.))
+            .width(px(580.))
             .child(cmd)
     });
 }

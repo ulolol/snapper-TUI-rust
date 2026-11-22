@@ -18,7 +18,10 @@ use snapper_core::model::{
 };
 use snapperman::actions;
 use snapperman::state::ActiveView;
-use snapperman::theme::{self, AppThemePreset, CYBERPUNK_DRACULA_NAME};
+use snapperman::theme::{
+    self, AETHER_PARCHMENT_NAME, AETHERPUNK_CITADEL_NAME, ARCANEPUNK_ENCLAVE_NAME,
+    AppThemePreset, CYBERPUNK_DRACULA_NAME,
+};
 use snapperman::{AppPrefs, SnapperShell, WorkspaceModel};
 
 struct Harness {
@@ -30,7 +33,7 @@ struct Harness {
 async fn boot_app(cx: &mut TestAppContext) -> Harness {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        theme::init_themes(cx, AppThemePreset::CyberpunkDracula);
+        theme::init_themes(cx, AppThemePreset::AetherpunkCitadel);
         actions::bind_keys(cx);
     });
 
@@ -92,12 +95,12 @@ async fn boot_app(cx: &mut TestAppContext) -> Harness {
 }
 
 #[gpui_kit::test]
-async fn default_cyberpunk_dracula_theme_and_mock_snapshots_load(cx: &mut TestAppContext) {
+async fn default_aetherpunk_citadel_theme_and_mock_snapshots_load(cx: &mut TestAppContext) {
     let app = boot_app(cx).await;
 
     app.window
         .update(cx, |_, window, cx| {
-            assert_eq!(Theme::global(cx).theme_name(), CYBERPUNK_DRACULA_NAME);
+            assert_eq!(Theme::global(cx).theme_name(), AETHERPUNK_CITADEL_NAME);
             let ws = app.workspace.read(cx);
             assert_eq!(ws.configs().len(), 3);
             assert_eq!(ws.snapshots().len(), 18);
@@ -256,7 +259,33 @@ async fn cycles_themes_and_navigates_analytics_and_settings(cx: &mut TestAppCont
 
     app.window
         .update(cx, |_, window, cx| {
-            assert_eq!(app.shell.read(cx).theme_preset(), AppThemePreset::CyberpunkDracula);
+            assert_eq!(
+                app.shell.read(cx).theme_preset(),
+                AppThemePreset::AetherpunkCitadel
+            );
+            assert_eq!(Theme::global(cx).theme_name(), AETHERPUNK_CITADEL_NAME);
+
+            window.click("titlebar-cycle-theme", cx);
+            assert_eq!(
+                app.shell.read(cx).theme_preset(),
+                AppThemePreset::ArcanepunkEnclave
+            );
+            assert_eq!(Theme::global(cx).theme_name(), ARCANEPUNK_ENCLAVE_NAME);
+
+            window.click("titlebar-cycle-theme", cx);
+            assert_eq!(
+                app.shell.read(cx).theme_preset(),
+                AppThemePreset::AetherParchment
+            );
+            assert_eq!(Theme::global(cx).theme_name(), AETHER_PARCHMENT_NAME);
+
+            window.click("titlebar-cycle-theme", cx);
+            assert_eq!(
+                app.shell.read(cx).theme_preset(),
+                AppThemePreset::CyberpunkDracula
+            );
+            assert_eq!(Theme::global(cx).theme_name(), CYBERPUNK_DRACULA_NAME);
+
             window.click("titlebar-cycle-theme", cx);
             assert_eq!(app.shell.read(cx).theme_preset(), AppThemePreset::SystemDark);
             assert_eq!(Theme::global(cx).theme_name(), "Default Dark");
@@ -266,8 +295,11 @@ async fn cycles_themes_and_navigates_analytics_and_settings(cx: &mut TestAppCont
             assert_eq!(Theme::global(cx).theme_name(), "Default Light");
 
             window.click("titlebar-cycle-theme", cx);
-            assert_eq!(app.shell.read(cx).theme_preset(), AppThemePreset::CyberpunkDracula);
-            assert_eq!(Theme::global(cx).theme_name(), CYBERPUNK_DRACULA_NAME);
+            assert_eq!(
+                app.shell.read(cx).theme_preset(),
+                AppThemePreset::AetherpunkCitadel
+            );
+            assert_eq!(Theme::global(cx).theme_name(), AETHERPUNK_CITADEL_NAME);
 
             window.click("sidebar-nav-analytics", cx);
             window.render_frame(cx);
@@ -286,6 +318,89 @@ async fn cycles_themes_and_navigates_analytics_and_settings(cx: &mut TestAppCont
                 && !ws.read(cx).config_settings().is_empty()
                 && window.try_find("settings-view").is_some()
         }
+    })
+    .await;
+}
+
+#[gpui_kit::test]
+async fn clears_zero_match_filter_from_empty_state(cx: &mut TestAppContext) {
+    let app = boot_app(cx).await;
+
+    app.window
+        .update(cx, |_, window, cx| {
+            let toolbar = app.shell.read(cx).toolbar().clone();
+            let input = toolbar.read(cx).search_input().clone();
+            input.update(cx, |state, cx| {
+                state.set_value("nonexistent-snapshot-filter", window, cx);
+            });
+            app.workspace.update(cx, |ws, cx| {
+                ws.set_query("nonexistent-snapshot-filter".to_string(), cx);
+            });
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+    cx.wait_for(app.window, Duration::from_secs(2), {
+        let ws = app.workspace.clone();
+        move |window, cx| {
+            ws.read(cx).filtered_indices().is_empty()
+                && window.try_find("table-clear-filters").is_some()
+        }
+    })
+    .await;
+
+    app.window
+        .update(cx, |_, window, cx| {
+            window.click("table-clear-filters", cx);
+        })
+        .unwrap();
+
+    cx.wait_for(app.window, Duration::from_secs(2), {
+        let ws = app.workspace.clone();
+        move |window, cx| {
+            ws.read(cx).filtered_indices().len() == 18
+                && window.try_find("snapshot-row-root-145").is_some()
+        }
+    })
+    .await;
+}
+
+#[gpui_kit::test]
+async fn discards_unsaved_settings_changes(cx: &mut TestAppContext) {
+    let app = boot_app(cx).await;
+
+    app.window
+        .update(cx, |_, window, cx| {
+            window.click("sidebar-nav-settings", cx);
+        })
+        .unwrap();
+
+    cx.wait_for(app.window, Duration::from_secs(3), |window, _| {
+        window.try_find("setting-switch-TIMELINE_CREATE").is_some()
+    })
+    .await;
+
+    app.window
+        .update(cx, |_, window, cx| {
+            window.click("setting-switch-TIMELINE_CREATE", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+    cx.wait_for(app.window, Duration::from_secs(2), |window, _| {
+        window.try_find("settings-discard").is_some()
+    })
+    .await;
+
+    app.window
+        .update(cx, |_, window, cx| {
+            window.click("settings-discard", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+
+    cx.wait_for(app.window, Duration::from_secs(2), |window, _| {
+        window.try_find("settings-discard").is_none()
     })
     .await;
 }
@@ -438,7 +553,7 @@ async fn prompts_auth_dialog_when_backend_requires_authentication_and_loads_afte
 ) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        theme::init_themes(cx, AppThemePreset::CyberpunkDracula);
+        theme::init_themes(cx, AppThemePreset::AetherpunkCitadel);
         actions::bind_keys(cx);
     });
 
@@ -520,4 +635,35 @@ async fn prompts_auth_dialog_when_backend_requires_authentication_and_loads_afte
         }
     })
     .await;
+}
+
+#[gpui_kit::test]
+async fn sidebar_count_pills_fit_inside_expanded_rows(cx: &mut TestAppContext) {
+    let app = boot_app(cx).await;
+
+    app.window
+        .update(cx, |_, window, _| {
+            for (row_id, count_id) in [
+                ("sidebar-config-all", "sidebar-config-all-count"),
+                ("sidebar-config-root", "sidebar-config-root-count"),
+                ("sidebar-config-home", "sidebar-config-home-count"),
+                ("sidebar-config-var-log", "sidebar-config-var-log-count"),
+            ] {
+                let row = window.find(row_id).bounds();
+                let pill = window.find(count_id).bounds();
+                assert!(
+                    pill.size.width >= px(22.) && pill.size.height >= px(16.),
+                    "{count_id} should have explicit inline size inside {row_id}: pill={pill:?}, row={row:?}"
+                );
+                assert!(
+                    pill.left() >= row.left() && pill.right() <= row.right() - px(4.),
+                    "{count_id} should stay inside {row_id} horizontal bounds with right padding: pill={pill:?}, row={row:?}"
+                );
+                assert!(
+                    pill.top() >= row.top() && pill.bottom() <= row.bottom(),
+                    "{count_id} should stay vertically contained inside {row_id}: pill={pill:?}, row={row:?}"
+                );
+            }
+        })
+        .unwrap();
 }
