@@ -63,7 +63,7 @@ Every preset pairs tuned glass surface opacities with an embedded `1600×900` We
 2. **Storage Analytics (`Cmd/Ctrl + 2`)** — Top KPI cards (`Total Tracked Space`, `Total Snapshots`, `Configurations`, `Largest Snapshot`), per‑snapshot & per‑config `BarChart` visualizations, and click‑to‑inspect storage share rows.
 3. **Config & Retention (`Cmd/Ctrl + 3`)** — Grouped `get-config` / `set-config` editor with human‑readable retention descriptions, staged **Discard / Save** bar, and one‑click algorithm cleanup (`number`, `timeline`, `empty-pre-post`).
 
-### Measured Footprint & Runtime Profile *(Garuda Linux x86‑64, X11 + NVIDIA, `v0.7.3`)*
+### Measured Footprint & Runtime Profile *(Arch Linux x86‑64, Wayland, X11 + NVIDIA, `v0.7.3`)*
 | Metric | Measured Value | Notes |
 | :--- | :--- | :--- |
 | **Release Binary Size** | **`48.6 MiB`** | Single stripped ELF executable (`11` linked `.so` libs; no WebView/Chromium bundle) |
@@ -96,7 +96,7 @@ snapper-tui-rust/
 - **Snapper** (for live Linux usage): `snapper` installed and at least one config created (`snapper list-configs`).
 - **Desktop GPU / Windowing libraries** (Linux build requirements for `snapperman`):
 
-#### Arch / Garuda Linux
+#### Arch Linux
 ```bash
 sudo pacman -S --needed pkgconf openssl zstd fontconfig vulkan-icd-loader libxcb libxkbcommon libxkbcommon-x11 wayland
 ```
