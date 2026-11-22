@@ -1,0 +1,15 @@
+[package]
+name = "snapper-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "snapper-TUI-rust"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+ratatui = "0.28.1"
+snapper-core.workspace = true
+tachyonfx = "0.7.0"

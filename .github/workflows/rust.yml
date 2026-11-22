@@ -14,30 +14,113 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  tui:
+    name: Build & Test TUI
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: cargo build --verbose --release
-      - name: Run tests
-        run: cargo test --verbose
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy (TUI & Core)
+        run: cargo clippy -p snapper-core -p snapper-tui --all-targets -- -D warnings
+
+      - name: Run tests (TUI & Core)
+        run: cargo test -p snapper-core -p snapper-tui
+
+      - name: Build release binary (TUI)
+        run: cargo build -p snapper-tui --release
+
+      - name: Upload TUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapper-TUI-rust
+          path: target/release/snapper-TUI-rust
+          if-no-files-found: error
+
+  gui:
+    name: Build & Test GUI (snapperman)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies (GPUI, Vulkan, Wayland, X11, Fontconfig, Zstd)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libxcb1-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            libvulkan-dev \
+            libssl-dev \
+            libzstd-dev
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Clippy (Core with D-Bus)
+        run: cargo clippy -p snapper-core --features dbus --all-targets -- -D warnings
+
+      - name: Clippy (GUI)
+        run: cargo clippy -p snapperman --all-targets -- -D warnings
+
+      - name: Run tests (Core with D-Bus)
+        run: cargo test -p snapper-core --features dbus
+
+      - name: Run tests (GUI)
+        run: cargo test -p snapperman
+
+      - name: Build release binary (GUI)
+        run: cargo build -p snapperman --release
+
+      - name: Upload GUI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapperman
+          path: target/release/snapperman
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [tui, gui]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Restore executable permissions and verify artifacts
+        run: |
+          chmod +x release-artifacts/snapper-TUI-rust release-artifacts/snapperman
+          ls -lh release-artifacts/
+
+      - name: Upload release binaries
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           name: "Release ${{ github.ref_name }}"
           body: |
-            Automated release from CI.
+            Automated release from CI containing independently built `snapper-TUI-rust` (TUI) and `snapperman` (GPUI GUI) binaries.
+          generate_release_notes: true
           draft: false
           prerelease: false
-          token: ${{ secrets.RELEASE_PAT }}
-      - name: Upload binary
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: target/release/snapper-TUI-rust
+          files: |
+            release-artifacts/snapper-TUI-rust
+            release-artifacts/snapperman
           token: ${{ secrets.RELEASE_PAT }}

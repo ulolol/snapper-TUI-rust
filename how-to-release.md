@@ -25,18 +25,18 @@ This guide explains the minimal steps to publish a new version of the project us
 
 ## 3️⃣ Tag the new version
 
-The workflow triggers releases only on tags that match `v*`.
+The workflow triggers releases only on tags that match `v*`. Annotated tags (`git tag -a`, or signed `git tag -s` if GPG is configured) trigger the workflow:
 ```bash
-git tag -s v0.2.0 -m "Release v0.2.0"
+git tag -a v0.2.0 -m "Release v0.2.0"
 git push origin v0.2.0
 ```
 > Replace `0.2.0` with the version you set in `Cargo.toml`.
 
 ## 4️⃣ What the workflow does
 
-- **Build** (`cargo build --release`) and **test** (`cargo test`).
-- If the tag push succeeds, `softprops/action-gh-release@v2` creates a release named `Release vX.Y.Z`.
-- The compiled binary `target/release/snapper‑TUI‑rust` is uploaded as an asset.
+- **Separate TUI job (`tui`)**: runs `cargo clippy` and `cargo test` on `snapper-core` and `snapper-tui`, builds `target/release/snapper-TUI-rust` with zero GUI/X11/Wayland/D-Bus dependencies, and uploads it as an artifact.
+- **Separate GUI job (`gui`)**: installs GPUI Linux system dependencies, runs `cargo clippy` and `cargo test` on `snapper-core --features dbus` and `snapperman`, builds `target/release/snapperman`, and uploads it as an artifact.
+- **Release job (`release`)**: on `v*` tag pushes after both `tui` and `gui` succeed, downloads both artifacts, restores executable permissions, and `softprops/action-gh-release@v2` creates a release named `Release vX.Y.Z` with both `snapper-TUI-rust` and `snapperman` attached.
 - The workflow uses the `RELEASE_PAT` secret, so the default `GITHUB_TOKEN` permissions are not required for releases.
 
 ## 5️⃣ Verify the release

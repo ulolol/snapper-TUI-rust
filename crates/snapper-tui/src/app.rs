@@ -1,19 +1,11 @@
-use crate::data::Snapshot;
 use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
+use snapper_core::model::{Snapshot, SnapshotKey};
+use snapper_core::query::{SnapshotFilter, SortKey, TypeFilter, filter_snapshots, sort_snapshots};
 use std::collections::HashSet;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
 use tachyonfx::Effect;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortKey {
-    Number,
-    Type,
-    Date,
-    User,
-    UsedSpace,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionButton {
@@ -40,10 +32,17 @@ pub struct UiAreas {
 
 pub enum AsyncResult {
     Snapshots(Vec<Snapshot>),
-    Delete { success: usize, fail: usize },
+    Delete {
+        success: usize,
+        fail: usize,
+        first_error: Option<String>,
+    },
     Create(String),
     Apply(u32),
-    Status { request_id: u64, text: String },
+    Status {
+        request_id: u64,
+        text: String,
+    },
 }
 
 pub struct App {
@@ -69,8 +68,11 @@ pub struct App {
     pub fx_last_tick: Option<Instant>,
     pub current_sort_key: SortKey,
     pub sort_ascending: bool,
-    pub rx: Option<Receiver<Result<AsyncResult, String>>>,
-    pub selected_keys: HashSet<(String, u32)>,
+    /// Channel for blocking operations (refresh, create, delete, apply, explicit status).
+    pub op_rx: Option<Receiver<Result<AsyncResult, String>>>,
+    /// Separate channel for background selection status previews so they never clobber `op_rx`.
+    pub status_rx: Option<Receiver<Result<AsyncResult, String>>>,
+    pub selected_keys: HashSet<SnapshotKey>,
     pub status_request_id: u64,
     pub ui_areas: UiAreas,
 }
@@ -100,31 +102,26 @@ impl App {
             fx_last_tick: None,
             current_sort_key: SortKey::Number,
             sort_ascending: true,
-            rx: None,
+            op_rx: None,
+            status_rx: None,
             selected_keys: HashSet::new(),
             status_request_id: 0,
             ui_areas: UiAreas::default(),
         }
     }
 
-    pub fn snapshot_key(snap: &Snapshot) -> (String, u32) {
-        (snap.config.clone(), snap.number)
-    }
-
     pub fn get_filtered_snapshots(&self) -> Vec<&Snapshot> {
         if self.filter_input.is_empty() {
             return self.snapshots.iter().collect();
         }
-        let query = self.filter_input.to_lowercase();
-        self.snapshots
-            .iter()
-            .filter(|s| {
-                contains_case_insensitive(&s.description, &query)
-                    || contains_case_insensitive(&s.snapshot_type, &query)
-                    || contains_case_insensitive(&s.user, &query)
-                    || contains_case_insensitive(&s.config, &query)
-                    || matches_number(s.number, &query)
-            })
+        let filter = SnapshotFilter {
+            query: self.filter_input.clone(),
+            config: None,
+            type_filter: TypeFilter::All,
+        };
+        filter_snapshots(&self.snapshots, &filter)
+            .into_iter()
+            .filter_map(|idx| self.snapshots.get(idx))
             .collect()
     }
 
@@ -201,21 +198,40 @@ impl App {
         self.get_filtered_snapshots().get(idx).copied()
     }
 
-    pub fn get_targets_for_delete(&self) -> Vec<(String, u32)> {
+    pub fn get_targets_for_delete(&self) -> Vec<SnapshotKey> {
         if !self.selected_keys.is_empty() {
             self.snapshots
                 .iter()
-                .filter(|s| self.selected_keys.contains(&(s.config.clone(), s.number)))
-                .map(Self::snapshot_key)
+                .filter(|s| self.selected_keys.contains(&s.key()))
+                .map(Snapshot::key)
                 .collect()
         } else if let Some(snapshot) = self.get_selected_snapshot() {
-            vec![Self::snapshot_key(snapshot)]
+            vec![snapshot.key()]
         } else {
             vec![]
         }
     }
 
-    pub fn handle_delete_result(&mut self, success_count: usize, error_count: usize) {
+    /// Count how many current delete targets are protected (`#0`, `active`, or `default`).
+    pub fn count_protected_delete_targets(&self) -> usize {
+        let targets = self.get_targets_for_delete();
+        targets
+            .iter()
+            .filter(|k| {
+                self.snapshots
+                    .iter()
+                    .find(|s| &s.key() == *k)
+                    .is_some_and(Snapshot::is_protected)
+            })
+            .count()
+    }
+
+    pub fn handle_delete_result(
+        &mut self,
+        success_count: usize,
+        error_count: usize,
+        first_error: Option<String>,
+    ) {
         if success_count > 0 {
             self.message = if success_count == 1 {
                 String::from("🗑️ Deleted 1 snapshot")
@@ -226,14 +242,17 @@ impl App {
                 self.message.push_str(&format!(" ({} failed ❌)", error_count));
             }
         } else if error_count > 0 {
-            self.message = format!("❌ Failed to delete {} snapshot(s)", error_count);
+            self.message = match first_error {
+                Some(err) => format!("❌ {}", err),
+                None => format!("❌ Failed to delete {} snapshot(s)", error_count),
+            };
         }
 
         self.clear_selections();
     }
 
-    pub fn get_target_for_apply(&self) -> Option<(String, u32)> {
-        self.get_selected_snapshot().map(Self::snapshot_key)
+    pub fn get_target_for_apply(&self) -> Option<SnapshotKey> {
+        self.get_selected_snapshot().map(Snapshot::key)
     }
 
     pub fn on_tick(&mut self) {
@@ -269,41 +288,7 @@ impl App {
     }
 
     pub fn sort_snapshots(&mut self) {
-        match self.current_sort_key {
-            SortKey::Number => {
-                self.snapshots.sort_by(|a, b| {
-                    a.number.cmp(&b.number).then_with(|| a.config.cmp(&b.config))
-                });
-            }
-            SortKey::Type => {
-                self.snapshots.sort_by(|a, b| {
-                    a.snapshot_type
-                        .cmp(&b.snapshot_type)
-                        .then_with(|| a.number.cmp(&b.number))
-                });
-            }
-            SortKey::Date => {
-                self.snapshots.sort_by(|a, b| {
-                    a.date.cmp(&b.date).then_with(|| a.number.cmp(&b.number))
-                });
-            }
-            SortKey::User => {
-                self.snapshots.sort_by(|a, b| {
-                    a.user.cmp(&b.user).then_with(|| a.number.cmp(&b.number))
-                });
-            }
-            SortKey::UsedSpace => {
-                self.snapshots.sort_by(|a, b| {
-                    a.used_space
-                        .unwrap_or(0)
-                        .cmp(&b.used_space.unwrap_or(0))
-                        .then_with(|| a.number.cmp(&b.number))
-                });
-            }
-        }
-        if !self.sort_ascending {
-            self.snapshots.reverse();
-        }
+        sort_snapshots(&mut self.snapshots, self.current_sort_key, self.sort_ascending);
         self.clamp_selection();
     }
 
@@ -317,7 +302,7 @@ impl App {
 
     pub fn toggle_selection(&mut self) {
         if let Some(snap) = self.get_selected_snapshot() {
-            let key = Self::snapshot_key(snap);
+            let key = snap.key();
             if !self.selected_keys.remove(&key) {
                 self.selected_keys.insert(key);
             }
@@ -333,62 +318,10 @@ impl App {
     }
 }
 
-/// Case-insensitive substring match with a zero-allocation ASCII fast path.
-fn contains_case_insensitive(haystack: &str, needle_lower: &str) -> bool {
-    if needle_lower.is_empty() {
-        return true;
-    }
-    if haystack.is_ascii() && needle_lower.is_ascii() {
-        let h = haystack.as_bytes();
-        let n = needle_lower.as_bytes();
-        if n.len() > h.len() {
-            return false;
-        }
-        return h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
-    }
-    haystack.to_lowercase().contains(needle_lower)
-}
-
-/// Check if a snapshot number's decimal representation contains `query` without allocating.
-fn matches_number(mut num: u32, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    if !query.bytes().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let mut buf = [b'0'; 10];
-    let mut pos = buf.len();
-    if num == 0 {
-        pos -= 1;
-        buf[pos] = b'0';
-    } else {
-        while num > 0 {
-            pos -= 1;
-            buf[pos] = b'0' + (num % 10) as u8;
-            num /= 10;
-        }
-    }
-    let num_str = std::str::from_utf8(&buf[pos..]).unwrap_or("");
-    num_str.contains(query)
-}
-
-/// Helper function for human-readable sizes.
-pub fn format_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{}B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1}K", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1}M", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.1}G", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snapper_core::format::format_size;
 
     fn make_snap(config: &str, number: u32, desc: &str) -> Snapshot {
         Snapshot {
@@ -433,17 +366,27 @@ mod tests {
             make_snap("root", 2, "beta"),
             make_snap("home", 2, "gamma"),
         ];
-        app.table_state.select(Some(1)); // ("root", 2)
+        app.table_state.select(Some(1));
         app.toggle_selection();
 
-        // Re-sort by number ascending -> ("home", 2), ("root", 2), ("root", 10)
         app.sort_snapshots();
         let targets = app.get_targets_for_delete();
-        assert_eq!(targets, vec![("root".to_string(), 2)]);
+        assert_eq!(targets, vec![SnapshotKey::new("root", 2)]);
     }
 
     #[test]
-    fn test_format_size() {
+    fn test_protected_delete_target_counting() {
+        let mut app = App::new();
+        let mut active_snap = make_snap("root", 10, "active");
+        active_snap.active = true;
+        let normal = make_snap("root", 11, "normal");
+        app.snapshots = vec![active_snap, normal];
+        app.table_state.select(Some(0));
+        assert_eq!(app.count_protected_delete_targets(), 1);
+    }
+
+    #[test]
+    fn test_format_size_integration() {
         assert_eq!(format_size(512), "512B");
         assert_eq!(format_size(2048), "2.0K");
         assert_eq!(format_size(5 * 1024 * 1024), "5.0M");

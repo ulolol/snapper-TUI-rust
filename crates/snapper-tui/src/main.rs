@@ -1,12 +1,12 @@
 mod app;
-mod data;
 mod ui;
 
 use crate::{
-    app::{ActionButton, App, AsyncResult, SortKey},
+    app::{ActionButton, App, AsyncResult},
     ui as app_ui,
 };
 use ratatui::{
+    Terminal,
     backend::CrosstermBackend,
     crossterm::{
         event::{
@@ -14,12 +14,16 @@ use ratatui::{
             KeyModifiers, MouseButton, MouseEventKind,
         },
         execute,
-        terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+        terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
     },
     layout::Rect,
-    Terminal,
 };
-use std::{io, sync::mpsc, thread, time::Duration};
+use snapper_core::backend::{
+    ElevationStrategy, MockSnapperBackend, SnapperBackend, SnapperCliBackend,
+};
+use snapper_core::model::CreateSnapshotRequest;
+use snapper_core::query::{SortKey, resolve_default_compare_range};
+use std::{io, sync::Arc, sync::mpsc, thread, time::Duration};
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
@@ -65,20 +69,22 @@ fn rect_contains(r: Rect, col: u16, row: u16) -> bool {
         && row < r.y.saturating_add(r.height)
 }
 
-fn spawn_refresh(app: &mut App, loading_msg: &str) {
+fn spawn_refresh(app: &mut App, backend: &Arc<dyn SnapperBackend>, loading_msg: &str) {
     app.loading = true;
     app.loading_message = loading_msg.to_string();
     let (tx, rx) = mpsc::channel();
-    app.rx = Some(rx);
+    app.op_rx = Some(rx);
+    let backend = Arc::clone(backend);
     thread::spawn(move || {
-        let res = crate::data::list_snapshots()
+        let res = backend
+            .list_snapshots(None, true)
             .map(AsyncResult::Snapshots)
             .map_err(|e| e.to_string());
         let _ = tx.send(res);
     });
 }
 
-fn spawn_status_fetch(app: &mut App, blocking_overlay: bool) {
+fn spawn_status_fetch(app: &mut App, backend: &Arc<dyn SnapperBackend>, blocking_overlay: bool) {
     if app.loading {
         return;
     }
@@ -86,20 +92,60 @@ fn spawn_status_fetch(app: &mut App, blocking_overlay: bool) {
         app.status_request_id = app.status_request_id.wrapping_add(1);
         let request_id = app.status_request_id;
         app.status_text.clear();
-        app.message = format!("⏳ Fetching status for {}...", snap.number);
+
+        let Some((from, to)) = resolve_default_compare_range(&snap, &app.snapshots) else {
+            app.message = format!("ℹ️ No comparable adjacent snapshot for {}.", snap.key());
+            return;
+        };
+
+        app.message = format!("⏳ Fetching status for {} ({}..{})...", snap.key(), from, to);
         if blocking_overlay {
             app.loading = true;
-            app.loading_message = format!("Fetching status for {}...", snap.number);
+            app.loading_message = format!("Fetching status for {}...", snap.key());
         }
+
         let (tx, rx) = mpsc::channel();
-        app.rx = Some(rx);
+        if blocking_overlay {
+            app.op_rx = Some(rx);
+        } else {
+            app.status_rx = Some(rx);
+        }
+
+        let backend = Arc::clone(backend);
         thread::spawn(move || {
-            let res = crate::data::get_snapshot_status(&snap)
-                .map(|text| AsyncResult::Status { request_id, text })
+            let res = backend
+                .snapshot_status(&snap.config, from, to)
+                .map(|changes| {
+                    let text = if changes.is_empty() {
+                        format!("No file changes in {}..{}.", from, to)
+                    } else {
+                        changes
+                            .into_iter()
+                            .map(|c| format!("{} {}", c.flags.to_flag_string(), c.path))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    AsyncResult::Status { request_id, text }
+                })
                 .map_err(|e| e.to_string());
             let _ = tx.send(res);
         });
     }
+}
+
+fn trigger_delete(app: &mut App) {
+    let targets = app.get_targets_for_delete();
+    if targets.is_empty() {
+        return;
+    }
+    let protected_count = app.count_protected_delete_targets();
+    if protected_count == targets.len() {
+        app.message = String::from(
+            "❌ Protected snapshot(s) (#0 / active / default) cannot be deleted.",
+        );
+        return;
+    }
+    app.show_delete_popup = true;
 }
 
 fn trigger_apply(app: &mut App) {
@@ -112,24 +158,81 @@ fn trigger_apply(app: &mut App) {
     }
 }
 
-fn trigger_status(app: &mut App) {
+fn trigger_status(app: &mut App, backend: &Arc<dyn SnapperBackend>) {
     if app.get_selected_count() > 0 {
         app.message = String::from(
             "❌ Error: Cannot get status with multi-selection active. Clear selections first.",
         );
     } else {
-        spawn_status_fetch(app, true);
+        spawn_status_fetch(app, backend, true);
+    }
+}
+
+fn handle_async_result(
+    app: &mut App,
+    backend: &Arc<dyn SnapperBackend>,
+    result: Result<AsyncResult, String>,
+) {
+    match result {
+        Ok(AsyncResult::Snapshots(snapshots)) => {
+            app.snapshots = snapshots;
+            app.sort_snapshots();
+            app.message = format!("✅ Loaded {} snapshots.", app.snapshots.len());
+            spawn_status_fetch(app, backend, false);
+        }
+        Ok(AsyncResult::Create(name)) => {
+            app.message = format!("✅ Snapshot created: {}", name);
+            spawn_refresh(app, backend, "Refreshing...");
+        }
+        Ok(AsyncResult::Delete {
+            success,
+            fail,
+            first_error,
+        }) => {
+            app.handle_delete_result(success, fail, first_error);
+            spawn_refresh(app, backend, "Refreshing...");
+        }
+        Ok(AsyncResult::Apply(number)) => {
+            app.message = format!("✅ Snapshot {} applied. Reboot to take effect.", number);
+        }
+        Ok(AsyncResult::Status { request_id, text }) => {
+            if request_id == app.status_request_id {
+                app.status_text = text;
+                app.message = String::from("✅ Status loaded.");
+                app.status_scroll = 0;
+            }
+        }
+        Err(e) => {
+            app.message = format!("❌ Error: {}", e);
+        }
     }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+        println!(
+            "snapper-TUI-rust — Terminal UI for Snapper snapshots\n\n\
+             USAGE:\n  snapper-TUI-rust [OPTIONS]\n\n\
+             OPTIONS:\n  \
+               --mock      Run against deterministic mock snapshots\n  \
+               -h, --help  Show this help message"
+        );
+        return Ok(());
+    }
+
+    let use_mock = std::env::args().any(|arg| arg == "--mock");
+    let backend: Arc<dyn SnapperBackend> = if use_mock {
+        Arc::new(MockSnapperBackend::seeded())
+    } else {
+        Arc::new(SnapperCliBackend::new(ElevationStrategy::SudoNonInteractive))
+    };
+
     let mut guard = TerminalGuard::new()?;
     let mut app = App::new();
 
-    // Start initial load in a separate thread
-    spawn_refresh(&mut app, "Loading...");
+    spawn_refresh(&mut app, &backend, "Loading...");
 
-    let res = run_app(&mut guard.terminal, &mut app);
+    let res = run_app(&mut guard.terminal, &mut app, &backend);
     drop(guard);
 
     if let Err(err) = res {
@@ -142,48 +245,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
+    backend: &Arc<dyn SnapperBackend>,
 ) -> io::Result<()> {
     loop {
         terminal.draw(|f| app_ui::draw(f, app))?;
 
-        // Check for threaded results
-        if let Some(rx) = &app.rx
+        if let Some(rx) = &app.op_rx
             && let Ok(result) = rx.try_recv()
         {
-                app.loading = false;
-                app.rx = None;
-                match result {
-                    Ok(AsyncResult::Snapshots(snapshots)) => {
-                        app.snapshots = snapshots;
-                        app.sort_snapshots();
-                        app.message = format!("✅ Loaded {} snapshots.", app.snapshots.len());
-                    }
-                    Ok(AsyncResult::Create(name)) => {
-                        app.message = format!("✅ Snapshot created: {}", name);
-                        spawn_refresh(app, "Refreshing...");
-                    }
-                    Ok(AsyncResult::Delete { success, fail }) => {
-                        app.handle_delete_result(success, fail);
-                        spawn_refresh(app, "Refreshing...");
-                    }
-                    Ok(AsyncResult::Apply(number)) => {
-                        app.message =
-                            format!("✅ Snapshot {} applied. Reboot to take effect.", number);
-                    }
-                    Ok(AsyncResult::Status { request_id, text }) => {
-                        if request_id == app.status_request_id {
-                            app.status_text = text;
-                            app.message = String::from("✅ Status loaded.");
-                            app.status_scroll = 0;
-                        }
-                    }
-                    Err(e) => {
-                        app.message = format!("❌ Error: {}", e);
-                    }
-                }
+            app.loading = false;
+            app.op_rx = None;
+            handle_async_result(app, backend, result);
         }
 
-        // Handle events
+        if let Some(rx) = &app.status_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            app.status_rx = None;
+            handle_async_result(app, backend, result);
+        }
+
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
@@ -191,14 +272,12 @@ fn run_app<B: ratatui::backend::Backend>(
                         continue;
                     }
 
-                    // Always allow Ctrl+C to exit cleanly
                     if key.code == KeyCode::Char('c')
                         && key.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         return Ok(());
                     }
 
-                    // Splash Screen Handling
                     if app.show_splash {
                         if key.kind == KeyEventKind::Press {
                             app.show_splash = false;
@@ -206,12 +285,10 @@ fn run_app<B: ratatui::backend::Backend>(
                         continue;
                     }
 
-                    // Ignore other input while a blocking operation is running
                     if app.loading {
                         continue;
                     }
 
-                    // Popup Handling
                     if app.show_delete_popup {
                         if key.kind == KeyEventKind::Press {
                             match key.code {
@@ -223,23 +300,17 @@ fn run_app<B: ratatui::backend::Backend>(
                                             format!("Deleting {} snapshot(s)...", targets.len());
 
                                         let (tx, rx) = mpsc::channel();
-                                        app.rx = Some(rx);
+                                        app.op_rx = Some(rx);
+                                        let backend = Arc::clone(backend);
 
                                         thread::spawn(move || {
-                                            let mut success_count = 0;
-                                            let mut error_count = 0;
-
-                                            for (config, number) in targets {
-                                                match crate::data::delete_snapshot(&config, number)
-                                                {
-                                                    Ok(_) => success_count += 1,
-                                                    Err(_) => error_count += 1,
-                                                }
-                                            }
-
+                                            let report = backend.delete_snapshots(&targets);
+                                            let first_error =
+                                                report.failed.first().map(|(_, err)| err.clone());
                                             let _ = tx.send(Ok(AsyncResult::Delete {
-                                                success: success_count,
-                                                fail: error_count,
+                                                success: report.success_count(),
+                                                fail: report.fail_count(),
+                                                first_error,
                                             }));
                                         });
                                     }
@@ -258,19 +329,21 @@ fn run_app<B: ratatui::backend::Backend>(
                         if key.kind == KeyEventKind::Press {
                             match key.code {
                                 KeyCode::Enter => {
-                                    if let Some((config, number)) = app.get_target_for_apply() {
+                                    if let Some(target) = app.get_target_for_apply() {
                                         app.loading = true;
                                         app.loading_message =
-                                            format!("Applying snapshot {}...", number);
+                                            format!("Applying snapshot {}...", target.number);
 
                                         let (tx, rx) = mpsc::channel();
-                                        app.rx = Some(rx);
+                                        app.op_rx = Some(rx);
+                                        let backend = Arc::clone(backend);
+                                        let num = target.number;
 
                                         thread::spawn(move || {
-                                            let res =
-                                                crate::data::rollback_snapshot(&config, number)
-                                                    .map(|_| AsyncResult::Apply(number))
-                                                    .map_err(|e| e.to_string());
+                                            let res = backend
+                                                .rollback_snapshot(&target)
+                                                .map(|_| AsyncResult::Apply(num))
+                                                .map_err(|e| e.to_string());
                                             let _ = tx.send(res);
                                         });
                                     }
@@ -290,14 +363,23 @@ fn run_app<B: ratatui::backend::Backend>(
                             KeyCode::Enter if key.kind == KeyEventKind::Press => {
                                 let input = app.create_input.trim().to_string();
                                 if !input.is_empty() {
+                                    let config = app
+                                        .get_selected_snapshot()
+                                        .map(|s| s.config.clone())
+                                        .filter(|c| !c.is_empty())
+                                        .unwrap_or_else(|| "root".to_string());
+
                                     app.loading = true;
                                     app.loading_message = String::from("Creating snapshot...");
 
                                     let (tx, rx) = mpsc::channel();
-                                    app.rx = Some(rx);
+                                    app.op_rx = Some(rx);
+                                    let backend = Arc::clone(backend);
 
                                     thread::spawn(move || {
-                                        let res = crate::data::create_snapshot(&input)
+                                        let req = CreateSnapshotRequest::single(config, input.clone());
+                                        let res = backend
+                                            .create_snapshot(&req)
                                             .map(|_| AsyncResult::Create(input))
                                             .map_err(|e| e.to_string());
                                         let _ = tx.send(res);
@@ -371,7 +453,7 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('r') | KeyCode::Char('R')
                             if key.kind == KeyEventKind::Press =>
                         {
-                            spawn_refresh(app, "Refreshing...");
+                            spawn_refresh(app, backend, "Refreshing...");
                         }
                         KeyCode::Char('a') | KeyCode::Char('A')
                             if key.kind == KeyEventKind::Press =>
@@ -380,36 +462,36 @@ fn run_app<B: ratatui::backend::Backend>(
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             app.next();
-                            spawn_status_fetch(app, false);
+                            spawn_status_fetch(app, backend, false);
                         }
                         KeyCode::Up | KeyCode::Char('k') => {
                             app.previous();
-                            spawn_status_fetch(app, false);
+                            spawn_status_fetch(app, backend, false);
                         }
                         KeyCode::PageDown => {
                             app.page_down(10);
-                            spawn_status_fetch(app, false);
+                            spawn_status_fetch(app, backend, false);
                         }
                         KeyCode::PageUp => {
                             app.page_up(10);
-                            spawn_status_fetch(app, false);
+                            spawn_status_fetch(app, backend, false);
                         }
                         KeyCode::Char('d') | KeyCode::Char('D')
                             if key.kind == KeyEventKind::Press =>
                         {
-                            if !app.get_targets_for_delete().is_empty() {
-                                app.show_delete_popup = true;
-                            }
+                            trigger_delete(app);
                         }
                         KeyCode::Char('s') | KeyCode::Char('S')
                             if key.kind == KeyEventKind::Press =>
                         {
-                            trigger_status(app);
+                            trigger_status(app, backend);
                         }
                         KeyCode::Char(' ') if key.kind == KeyEventKind::Press => {
                             app.toggle_selection();
                         }
-                        // Sorting keybinds
+                        KeyCode::Char('0') if key.kind == KeyEventKind::Press => {
+                            app.set_sort_key(SortKey::Config);
+                        }
                         KeyCode::Char('1') if key.kind == KeyEventKind::Press => {
                             app.set_sort_key(SortKey::Number);
                         }
@@ -451,7 +533,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                 } else {
                                     app.next();
                                 }
-                                spawn_status_fetch(app, false);
+                                spawn_status_fetch(app, backend, false);
                             }
                         }
                         MouseEventKind::Down(MouseButton::Left) => {
@@ -464,15 +546,13 @@ fn run_app<B: ratatui::backend::Backend>(
                             {
                                 match action {
                                     ActionButton::Create => app.show_create_popup = true,
-                                    ActionButton::Delete => {
-                                        if !app.get_targets_for_delete().is_empty() {
-                                            app.show_delete_popup = true;
-                                        }
-                                    }
+                                    ActionButton::Delete => trigger_delete(app),
                                     ActionButton::Apply => trigger_apply(app),
                                     ActionButton::Filter => app.filtering = true,
-                                    ActionButton::Status => trigger_status(app),
-                                    ActionButton::Refresh => spawn_refresh(app, "Refreshing..."),
+                                    ActionButton::Status => trigger_status(app, backend),
+                                    ActionButton::Refresh => {
+                                        spawn_refresh(app, backend, "Refreshing...")
+                                    }
                                     ActionButton::Quit => return Ok(()),
                                 }
                             } else if rect_contains(app.ui_areas.table, mouse.column, mouse.row) {
@@ -485,17 +565,21 @@ fn run_app<B: ratatui::backend::Backend>(
                                     let content_start = table.x.saturating_add(4);
                                     if mouse.column >= content_start {
                                         let col_x = mouse.column - content_start;
-                                        // Column widths: 8, 10, 22, 12, 12 with column_spacing = 1
+                                        // Column widths: Cfg(8), #(8), Type(8), Date(20), User(10), Space(10), Desc(Min) with spacing = 1
                                         if col_x < 9 {
+                                            app.set_sort_key(SortKey::Config);
+                                        } else if col_x < 18 {
                                             app.set_sort_key(SortKey::Number);
-                                        } else if col_x < 20 {
+                                        } else if col_x < 27 {
                                             app.set_sort_key(SortKey::Type);
-                                        } else if col_x < 43 {
+                                        } else if col_x < 48 {
                                             app.set_sort_key(SortKey::Date);
-                                        } else if col_x < 56 {
+                                        } else if col_x < 59 {
                                             app.set_sort_key(SortKey::User);
-                                        } else if col_x < 69 {
+                                        } else if col_x < 70 {
                                             app.set_sort_key(SortKey::UsedSpace);
+                                        } else {
+                                            app.set_sort_key(SortKey::Description);
                                         }
                                     }
                                 } else if mouse.row >= app.ui_areas.table_first_data_row
@@ -506,7 +590,7 @@ fn run_app<B: ratatui::backend::Backend>(
                                     let target_index = app.table_state.offset() + row_offset;
                                     if target_index < app.get_filtered_snapshots().len() {
                                         app.select_row(target_index);
-                                        spawn_status_fetch(app, false);
+                                        spawn_status_fetch(app, backend, false);
                                     }
                                 }
                             }
@@ -518,7 +602,6 @@ fn run_app<B: ratatui::backend::Backend>(
             }
         }
 
-        // Tick animations
         app.on_tick();
     }
 }
