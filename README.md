@@ -7,11 +7,15 @@
 
 A Rust workspace for managing **Snapper** Btrfs/LVM snapshots with two native frontends powered by a shared core engine:
 
-- **`snapperman`** — GPU‑accelerated desktop GUI built on **GPUI** and **`gpui-kit`**, featuring a **Soft Organic Aetherpunk / Arcanepunk Theme Suite** (**Aetherpunk Citadel** default, **Arcanepunk Enclave**, **Aether Parchment** light), floating rounded inset workspace panels, pill controls, preserved **Cyberpunk Dracula**, and **System Dark / Light** presets.
+- **`snapperman`** — GPU‑accelerated desktop GUI built on **GPUI** and **`gpui-kit`**, featuring a seamless **Soft Organic Aetherpunk / Arcanepunk** single‑pane frosted UI layered over **6 bespoke embedded abstract landscape backdrops**, inline normal‑flow count pills, pill controls, full **`AllAssets` Lucide** vector iconography, plus **Cyberpunk Dracula** and **System Dark / Light** presets.
 - **`snapper-TUI-rust`** — Fast, lightweight terminal user interface built on **Ratatui** with zero GUI dependencies.
 - **`snapper-core`** — Shared backend (`org.opensuse.Snapper` D‑Bus + CLI/`pkexec` + deterministic `--mock`), typed models, tolerant parsers, filtering/sorting, file trees, and analytics.
 
-![Demo](snapper-TUI-rust.gif)
+### `snapperman` — Desktop GUI (GPUI)
+![snapperman Desktop GUI Demo](snapperman.gif)
+
+### `snapper-TUI-rust` — Terminal UI (Ratatui)
+![snapper-TUI-rust Terminal UI Demo](snapper-TUI-rust.gif)
 
 ---
 
@@ -19,10 +23,10 @@ A Rust workspace for managing **Snapper** Btrfs/LVM snapshots with two native fr
 
 ### Desktop GUI (`snapperman`)
 - **Soft Organic Aetherpunk / Arcanepunk Single-Pane UI & Theme Backdrops** — Seamless, borderless frosted workspace (`Sidebar`, `Toolbar`, `DataTable`, `Inspector`, `Analytics`, `Settings`) with transparent section/row/table borders and edge-to-edge layout flow layered over **6 bespoke, embedded abstract sculptural landscape backgrounds** (one matched per theme, switching live with `Cmd/Ctrl+T` or the Command Palette). Low-opacity frosted surfaces and atmospheric scrims keep backgrounds visible across both light (**Aether Parchment**, **System Light**) and dark (**Aetherpunk Citadel**, **Arcanepunk Enclave**, **Cyberpunk Dracula**, **System Dark**) presets while preserving crisp legibility. Features concentric `10px / 16px / pill` geometry, borderless pill resize handles, circular orbital astrolabe crest & S-wave filigree dividers, and **100% themed vector icons** via `gpui-kit`'s full `AllAssets` Lucide catalog (zero emojis in UI chrome).
-- **🗂️ Floating Multi‑Config Vault Sidebar & Virtualized Table** — Tonal vault summary pill, `All Configs` or per‑config filtering (`root`, `home`, `var-log`, etc.) with snapshot count badges, two‑phase `used-space` hydration, pill-rounded storage micro-bars, multi‑select checkboxes with floating pill batch actions, sortable columns, actionable empty states with one-click filter reset, and row context menus.
-- **🔬 Floating Specimen Inspector, File‑Change Tree & Native Diff Viewer** — Pill tabs (`Overview` / `Changes`), glowing circular status orb, borderless 2×2 tonal telemetry tiles (`Used Space`, `Retention Policy`, `Type / Pair Jump`, `File Delta`), borderless `DescriptionList`, risk-separated pill actions, blast-radius (`+A / ~M / -D / Attr`) diff summary pills, Unified & Split modes inside a sunken pill toggle track, `syntect` syntax highlighting, binary detection, 2 MiB truncation protection, arbitrary `A..B` / `N..0` comparison picker, and selective path restoration (`undochange`).
+- **Multi‑Config Vault Sidebar & Virtualized Table** — Borderless tonal Vault summary pill, `All Configs` or per‑config filtering (`root`, `home`, `var-log`, etc.) with inline `aether::count_pill` badges, two‑phase `used-space` hydration, pill-rounded storage micro-bars, multi‑select checkboxes with batch action pills, sortable columns, actionable empty states with one-click filter reset, and row context menus.
+- **Specimen Inspector, File‑Change Tree & Native Diff Viewer** — Seamless single-pane inspector with pill tabs (`Overview` / `Changes`), glowing circular status orb, borderless 2×2 tonal telemetry tiles (`Used Space`, `Retention Policy`, `Type / Pair Jump`, `File Delta`), borderless `DescriptionList`, risk-separated pill actions, blast-radius (`+A / ~M / -D / Attr`) diff summary pills, Unified & Split modes inside a sunken pill toggle track, `syntect` syntax highlighting, binary detection, 2 MiB truncation protection, arbitrary `A..B` / `N..0` comparison picker, and selective path restoration (`undochange`).
 - **🛠️ Full Snapshot Lifecycle** — Create (`single`, `pre`, paired `post` snapshots, cleanup policy, `important=yes`, userdata), modify metadata/cleanup/pin state, delete with protected `#0`/`active`/`default` guards, and roll back with confirmation alerts across soft pill-actioned dialogs.
-- **📊 Storage Analytics & Config Manager** — Soft floating KPI cards with circular icon medallions, per‑snapshot and per‑config `BarChart` visualizations, storage share bars with click‑to‑inspect navigation, and grouped `get-config` / `set-config` retention editing with human-readable key descriptions + staged **Discard / Save** banner and pill cleanup execution (`number`, `timeline`, `empty-pre-post`).
+- **📊 Storage Analytics & Config Manager** — Soft frosted KPI cards with circular icon medallions, per‑snapshot and per‑config `BarChart` visualizations, storage share bars with click‑to‑inspect navigation, and grouped `get-config` / `set-config` retention editing with human-readable key descriptions + staged **Discard / Save** banner and pill cleanup execution (`number`, `timeline`, `empty-pre-post`).
 - **⌨️ Command Palette** — Instant `Cmd/Ctrl+K` fuzzy command palette for actions, views, configs, and themes.
 - **🐧 Native Linux D‑Bus + Session Auth & CLI Fallback** — Connects directly to `org.opensuse.Snapper` via `zbus` on Linux, tries passwordless `sudo -n`, and presents a built‑in **Administrator Authentication** dialog (`sudo -S` single-prompt session with zeroed memory + non-hanging `pkexec --disable-internal-agent` option) so it works even on minimal window managers without a running Polkit agent.
 
@@ -30,6 +34,41 @@ A Rust workspace for managing **Snapper** Btrfs/LVM snapshots with two native fr
 - **🖥️ Cyberpunk TUI** — Lightweight terminal dashboard built with `ratatui`, `crossterm`, and `tachyonfx`.
 - **🔄 Multi‑Config & Accurate Filtering** — Displays the `Cfg` column, supports sorting (`0`–`5` or clickable headers), search (`/`), batch multi‑select (`Space`), protected `#0`/`active`/`default` delete warnings, and safe compare‑range resolution when snapshots have gaps.
 - **🧪 Cross‑Platform Mock Mode** — Run `snapper-TUI-rust --mock` on any machine (Linux or macOS) without modifying real snapshots.
+
+---
+
+## 🎨 About `snapperman` (Desktop GUI)
+
+`snapperman` brings native GPU‑accelerated desktop ergonomics to Snapper snapshot management without bundling a browser engine:
+
+### Architecture & Tech Stack
+- **Rendering & UI**: Rust + **GPUI** + **`gpui-kit 0.10.0`** (Vulkan on Linux, Metal on macOS) — hardware‑accelerated composition at native refresh rates with zero JSON/IPC bridge between the UI and `snapper-core`.
+- **Syntax & Iconography**: `syntect` syntax highlighting for diff hunks and `gpui-kit`'s full **`AllAssets`** Lucide SVG icon catalog (`1,830` vector icons, zero UI chrome emojis).
+- **System Integration**: Native Linux D‑Bus client via `zbus` (`org.opensuse.Snapper`) with automatic CLI + masked `sudo -S` / `pkexec` fallback, plus deterministic `--mock` mode on macOS and Linux.
+
+### Built‑In Theme Suite & Abstract Backdrops (`164 KB` Total Embedded)
+Every preset pairs tuned glass surface opacities with an embedded `1600×900` WebP sculptural landscape backdrop (switch live with `Cmd/Ctrl+T` or the Command Palette `Cmd/Ctrl+K`):
+
+| Preset | Mode | Aesthetic & Palette |
+| :--- | :--- | :--- |
+| **Aetherpunk Citadel** *(Default)* | Dark | Astral lapis basalt terraces, burnished brass rings, luminous aether‑cyan mist |
+| **Arcanepunk Enclave** | Dark | Obsidian‑violet canyon curves, translucent amethyst orbs, alchemy‑emerald mist |
+| **Aether Parchment** | Light | Sunlit travertine arches, archival ivory parchment, antique brass & arcane teal |
+| **Cyberpunk Dracula** | Dark | Midnight‑indigo monolithic prisms, neon violet & cyber cyan/magenta mist |
+| **System Dark** | Dark | Monochrome dark charcoal basalt waves & brushed titanium spheres |
+| **System Light** | Light | High‑key alabaster & porcelain rolling hills with frosted‑glass spheres |
+
+### Views & Workflows
+1. **Snapshots (`Cmd/Ctrl + 1`)** — Collapsible **Snapshot Vault** config sidebar (`All Configs` + per‑config filters with inline count pills), sortable virtualized **DataTable**, filter chips (`All types`, `Single`, `Pre / Post`, `Important`, `Pinned`), batch multi‑select operations, and the borderless **Inspector** (`Overview` telemetry tiles + `Changes` file tree with Unified/Split diff viewer & path restore).
+2. **Storage Analytics (`Cmd/Ctrl + 2`)** — Top KPI cards (`Total Tracked Space`, `Total Snapshots`, `Configurations`, `Largest Snapshot`), per‑snapshot & per‑config `BarChart` visualizations, and click‑to‑inspect storage share rows.
+3. **Config & Retention (`Cmd/Ctrl + 3`)** — Grouped `get-config` / `set-config` editor with human‑readable retention descriptions, staged **Discard / Save** bar, and one‑click algorithm cleanup (`number`, `timeline`, `empty-pre-post`).
+
+### Measured Footprint & Runtime Profile *(Garuda Linux x86‑64, X11 + NVIDIA, `v0.7.3`)*
+| Metric | Measured Value | Notes |
+| :--- | :--- | :--- |
+| **Release Binary Size** | **`48.6 MiB`** | Single stripped ELF executable (`11` linked `.so` libs; no WebView/Chromium bundle) |
+| **Live Runtime RAM (`PSS`)** | **`278 MiB`** *(~`233 MiB` GPU‑pinned)* | Single OS process (`~333 MiB` RSS; pinning `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.json` skips Mesa Lavapipe/LLVM enumeration) |
+| **Swap Usage** | **`0 B`** | Hardware‑accelerated Vulkan pipeline with in‑process Rust state |
 
 ---
 
@@ -86,6 +125,10 @@ cargo run -p snapperman -- --mock
 
 ## 📦 Installation & Building
 
+### Prebuilt Binaries (Linux x86‑64)
+Download standalone `snapperman` (GUI, `48.6 MiB` in `v0.7.3`) and `snapper-TUI-rust` (TUI, `1.33 MiB` in `v0.7.3`) binaries directly from [**GitHub Releases**](https://github.com/ulolol/snapper-TUI-rust/releases) (`chmod +x` and place them on your `$PATH`, e.g. `~/.local/bin/`).
+
+### Building from Source
 Build `snapper-TUI-rust` and `snapperman` separately so Cargo does not unify workspace features (`snapperman` enables `snapper-core/dbus` on Linux, whereas building `snapper-tui` on its own keeps the TUI binary free of GUI and D-Bus dependencies):
 
 ```bash
@@ -212,7 +255,7 @@ Contributions are welcome! Feel free to open issues or submit pull requests.
 
 1. Fork the repo.
 2. Create a feature branch (`git checkout -b feat/awesome-feature`).
-3. Ensure `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass.
+3. Run the separate TUI and GUI `clippy` + `test` checks from [Testing](#-testing) above (`-p snapper-core -p snapper-tui`, `-p snapper-core --features dbus`, and `-p snapperman`) so workspace features remain isolated.
 4. Open a PR describing your changes.
 
 ## 📄 License

@@ -1,5 +1,11 @@
 # AI Development Log (`AILog.md`)
 
+## 2026-11-22 — `snapperman.gif` Showcase & `README.md` Update
+
+### Steps & Verification
+- **Stitched `snapperman.gif`**: Combined 11 captured `snapperman` screenshots from `~/Downloads/Screenshot_2026-11-22-*.png` using Python 3 + Pillow `13.0.0` (`ImageOps.fit` Lanczos to `1280×720`, per-frame 256-color MedianCut quantization with Floyd-Steinberg dithering, `duration=2300ms`, `disposal=2`, `loop=0`) into `/Users/kaos/Projects/snapper-tui-rust/snapperman.gif` (`2,804,060 bytes` / `2.67 MiB`). Verified via `magick identify` (11 frames at `1280x720`, `delay=230`, `Iterations: 0`) and visually inspected extracted frames `0`, `2`, and `4`.
+- **Updated `README.md`**: Added `snapperman.gif` directly above `snapper-TUI-rust.gif`, added a dedicated `About snapperman (Desktop GUI)` section (architecture, 6-theme backdrop table, 3 primary views, and measured Garuda Linux footprint), added the prebuilt GitHub Releases section (`v0.7.3`), and updated `Contributing` check commands to use separate GUI/TUI package checks.
+
 ## 2026-11-22 — Release `v0.7.3`: Workspace Version Bump, Full CI Parity Checks & Tag Push
 
 ### Steps & Verification (`task-736`)
